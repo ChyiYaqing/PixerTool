@@ -68,8 +68,31 @@ python3 pixer_upload.py photo.jpg
 | `--dry-run` | off | Convert only; never open a socket. |
 | `--probe` | off | Test TCP reachability and exit. |
 
+Before converting anything, an upload checks that the frame is actually
+answering, so a wrong Wi-Fi network fails in a few seconds instead of after the
+image has been processed.
+
 After the last byte is sent, the panel can take tens of seconds to refresh.
 Keep it powered and stay connected until the acknowledgement is printed.
+
+## Troubleshooting
+
+Failures name the likely cause rather than the raw socket error. If the
+computer is still on its usual network:
+
+```text
+error: cannot reach Pixer at 192.168.1.1:6000: no response within 5 seconds.
+  This computer is at 10.1.7.18, a different network from 192.168.1.1. Join the
+  frame's own Wi-Fi network (for example "Pixer 0939"), then retry.
+```
+
+| Message | Meaning |
+| --- | --- |
+| `a different network from 192.168.1.1` | Not joined to the frame's Wi-Fi. |
+| `on the same network ... probably asleep` | Right network; wake the frame with one short press. |
+| `nothing is listening on port 6000` | A device answered — usually a home router that also uses `192.168.1.1`. |
+| `connection to Pixer was lost after sending N of M bytes` | The link dropped mid-image; the frame keeps its previous picture. Upload again. |
+| `did not acknowledge completion` | All bytes arrived; the panel may still be refreshing. Look at it before retrying. |
 
 ## Tests
 

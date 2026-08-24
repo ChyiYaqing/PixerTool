@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import shutil
 import socket
 import subprocess
@@ -14,6 +15,8 @@ from pathlib import Path
 
 DEFAULT_HOST = "192.168.1.1"
 DEFAULT_PORT = 6000
+PROBE_TIMEOUT = 5.0
+WIFI_HINT = 'Join the frame\'s own Wi-Fi network (for example "Pixer 0939"), then retry.'
 LANDSCAPE_SIZE = (1872, 1404)
 PORTRAIT_SIZE = (1404, 1872)
 ACK_SIZE = 6
@@ -197,12 +200,62 @@ def file_header(payload_length: int) -> bytes:
     return f"#file#0008{payload_length:08d}imagebin".encode("ascii")
 
 
-def probe_device(host: str, port: int, timeout: float) -> None:
+def local_source_address(host: str) -> str | None:
+    """Address this computer would use to reach host; no packets are sent."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return
+        probe.connect((host, 9))
+        return probe.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        probe.close()
+
+
+def network_advice(host: str) -> str:
+    """Explain, from the local routing table, why the frame is out of reach."""
+    try:
+        target = ipaddress.IPv4Address(host)
+    except ipaddress.AddressValueError:
+        return WIFI_HINT
+    source = local_source_address(host)
+    if source is None:
+        return f"This computer has no route to {host}. {WIFI_HINT}"
+    if ipaddress.IPv4Address(source) not in ipaddress.ip_network(
+        f"{target}/24", strict=False
+    ):
+        return (
+            f"This computer is at {source}, a different network from {host}. "
+            f"{WIFI_HINT}"
+        )
+    return (
+        f"This computer is at {source}, on the same network as {host}, so the "
+        "frame is probably asleep. Press its button once and try again."
+    )
+
+
+def unreachable_message(host: str, port: int, timeout: float, exc: OSError) -> str:
+    if isinstance(exc, ConnectionRefusedError):
+        reason = f"something answered at {host}, but nothing is listening on port {port}"
+    elif isinstance(exc, (socket.timeout, TimeoutError)):
+        reason = f"no response within {timeout:.0f} seconds"
+    else:
+        reason = str(exc)
+    return (
+        f"cannot reach Pixer at {host}:{port}: {reason}.\n"
+        f"  {network_advice(host)}"
+    )
+
+
+def connect_to_pixer(host: str, port: int, timeout: float) -> socket.socket:
+    try:
+        return socket.create_connection((host, port), timeout=timeout)
     except OSError as exc:
-        raise PixerError(f"cannot reach Pixer at {host}:{port}: {exc}") from exc
+        raise PixerError(unreachable_message(host, port, timeout, exc)) from exc
+
+
+def probe_device(host: str, port: int, timeout: float = PROBE_TIMEOUT) -> None:
+    connect_to_pixer(host, port, timeout).close()
 
 
 def upload_payload(
@@ -213,12 +266,12 @@ def upload_payload(
     ack_timeout: float = 180.0,
 ) -> bytes:
     header = file_header(len(payload))
+    sent = 0
     try:
-        with socket.create_connection((host, port), timeout=connect_timeout) as sock:
+        with connect_to_pixer(host, port, connect_timeout) as sock:
             sock.sendall(header)
             view = memoryview(payload)
             chunk_size = 64 * 1024
-            sent = 0
             next_report = 10
             while sent < len(payload):
                 end = min(sent + chunk_size, len(payload))
@@ -236,7 +289,10 @@ def upload_payload(
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise PixerError(
-                        "image data was sent, but Pixer did not acknowledge completion"
+                        "image data was sent, but Pixer did not acknowledge "
+                        f"completion within {ack_timeout:.0f} seconds.\n"
+                        "  The frame may still be refreshing; look at it before "
+                        "uploading again."
                     )
                 sock.settimeout(min(1.0, remaining))
                 try:
@@ -250,7 +306,12 @@ def upload_payload(
     except PixerError:
         raise
     except OSError as exc:
-        raise PixerError(f"upload failed while communicating with Pixer: {exc}") from exc
+        percent = (sent * 100) // len(payload) if payload else 0
+        raise PixerError(
+            f"the connection to Pixer was lost after sending {sent} of "
+            f"{len(payload)} bytes ({percent}%): {exc}\n"
+            "  Keep the frame powered and stay on its Wi-Fi, then upload again."
+        ) from exc
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -276,13 +337,15 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.probe:
-            probe_device(args.host, args.port, 5.0)
+            probe_device(args.host, args.port)
             print(f"Pixer upload service is reachable at {args.host}:{args.port}")
             return 0
         if args.image is None:
             raise PixerError("an image path is required unless --probe is used")
         if not args.image.is_file():
             raise PixerError(f"image does not exist: {args.image}")
+        if not args.dry_run:
+            probe_device(args.host, args.port)
 
         payload, width, height = build_payload(args.image, args.orientation, args.fit)
         print(f"Prepared {width}x{height}, {len(payload)} bytes")
@@ -298,9 +361,12 @@ def main(argv: list[str] | None = None) -> int:
             + acknowledgement.decode("ascii", errors="backslashreplace")
         )
         return 0
-    except (PixerError, ValueError) as exc:
+    except (PixerError, ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        print("\ninterrupted before the upload finished", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

@@ -1,5 +1,8 @@
 import importlib.util
+import socket
+import threading
 import unittest
+import unittest.mock
 from pathlib import Path
 
 
@@ -45,6 +48,87 @@ class PixerEncodingTests(unittest.TestCase):
             pixer_upload.file_header(1_314_144),
             b"#file#000801314144imagebin",
         )
+
+
+class ConnectionDiagnosticsTests(unittest.TestCase):
+    def source_address(self, address):
+        patcher = unittest.mock.patch.object(
+            pixer_upload, "local_source_address", return_value=address
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_advice_when_mac_is_on_another_network(self):
+        self.source_address("10.1.7.18")
+        advice = pixer_upload.network_advice("192.168.1.1")
+        self.assertIn("10.1.7.18", advice)
+        self.assertIn("a different network", advice)
+        self.assertIn("Wi-Fi", advice)
+
+    def test_advice_when_mac_is_on_the_pixer_network(self):
+        self.source_address("192.168.1.42")
+        advice = pixer_upload.network_advice("192.168.1.1")
+        self.assertIn("same network", advice)
+        self.assertIn("asleep", advice)
+
+    def test_advice_without_any_route(self):
+        self.source_address(None)
+        self.assertIn("no route", pixer_upload.network_advice("192.168.1.1"))
+
+    def test_timeout_message_explains_the_silence(self):
+        self.source_address("10.1.7.18")
+        message = pixer_upload.unreachable_message(
+            "192.168.1.1", 6000, 5.0, socket.timeout("timed out")
+        )
+        self.assertIn("no response within 5 seconds", message)
+        self.assertIn("a different network", message)
+        self.assertNotIn("timed out", message)
+
+    def test_refused_message_points_at_the_wrong_device(self):
+        self.source_address("192.168.1.20")
+        message = pixer_upload.unreachable_message(
+            "192.168.1.1", 6000, 5.0, ConnectionRefusedError(61, "Connection refused")
+        )
+        self.assertIn("nothing is listening on port 6000", message)
+
+    def test_probe_reports_a_closed_port(self):
+        with socket.socket() as spare:
+            spare.bind(("127.0.0.1", 0))
+            port = spare.getsockname()[1]
+        with self.assertRaises(pixer_upload.PixerError) as caught:
+            pixer_upload.probe_device("127.0.0.1", port, timeout=2.0)
+        self.assertIn(f"cannot reach Pixer at 127.0.0.1:{port}", str(caught.exception))
+
+    def test_upload_fails_before_sending_when_unreachable(self):
+        with socket.socket() as spare:
+            spare.bind(("127.0.0.1", 0))
+            port = spare.getsockname()[1]
+        with self.assertRaises(pixer_upload.PixerError) as caught:
+            pixer_upload.upload_payload(b"\x00" * 16, "127.0.0.1", port, 2.0)
+        self.assertIn("cannot reach Pixer", str(caught.exception))
+
+
+class TransferFailureTests(unittest.TestCase):
+    def test_dropped_connection_reports_progress(self):
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+
+        def hang_up():
+            connection, _ = listener.accept()
+            connection.close()
+
+        worker = threading.Thread(target=hang_up)
+        worker.start()
+        self.addCleanup(listener.close)
+        self.addCleanup(worker.join)
+
+        with self.assertRaises(pixer_upload.PixerError) as caught:
+            pixer_upload.upload_payload(b"\x11" * (2 * 1024 * 1024), "127.0.0.1", port)
+        message = str(caught.exception)
+        self.assertIn("connection to Pixer was lost", message)
+        self.assertIn("2097152 bytes", message)
 
 
 if __name__ == "__main__":
