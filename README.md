@@ -12,6 +12,20 @@ third-party dependencies.
 python3 pixer_upload.py photo.jpg
 ```
 
+## The device
+
+| | |
+| --- | --- |
+| Model | G+ Pixer (`com.gigazone.main.pixer`, app "Pixer!") |
+| Panel | 7.8", 1872 x 1404, 16 grayscale levels |
+| Wi-Fi | 802.11 b/g/n, 1T1R |
+| Battery | Li-ion 8000 mAh |
+| Regions | CN / US / JP / RU / TW |
+
+A single image is 1,314,144 bytes on the wire. Over the frame's single-stream
+802.11n radio that is a few seconds of transfer, followed by tens of seconds of
+panel refresh.
+
 ## How it works
 
 The frame runs a plain TCP server on `192.168.1.1:6000` while in direct mode.
@@ -124,6 +138,7 @@ rotation), and the header format.
 - Short press — power on / wake
 - Hold 5 seconds — ordinary restart
 - Hold 15 seconds — factory reset
+- The restart-pin shipped with the frame drives its pinhole reset
 
 PixerTool never touches Wi-Fi settings or firmware. A successful upload only
 replaces the displayed image.

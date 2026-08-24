@@ -9,6 +9,9 @@ The relevant decompiled methods are:
 
 ## Image format
 
+The panel is 7.8" at 1872 x 1404, which the app addresses in either
+orientation.
+
 - Landscape input canvas: 1872 x 1404 pixels
 - Portrait input canvas: 1404 x 1872 pixels, rotated while packing
 - 16 grayscale levels (0 through 15)
@@ -41,7 +44,8 @@ For a normal Pixer image the complete header is:
 ```
 
 The Android app treats receipt of any six bytes after `#MOVE#d` as success; it
-does not inspect their content. An observed frame answers `#end1#`.
+does not inspect their content. A 7.8" Pixer running stock firmware answers
+`#end1#`.
 
 ## Dormant wake command
 
