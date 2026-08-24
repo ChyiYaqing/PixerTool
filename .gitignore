@@ -9,3 +9,6 @@ vendor/
 __pycache__/
 *.py[cod]
 .DS_Store
+
+# The 13 MB original of the README photo; the committed JPEG is derived from it.
+misc/images/GPixer-Hello.png

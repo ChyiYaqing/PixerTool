@@ -12,6 +12,11 @@ third-party dependencies.
 python3 pixer_upload.py photo.jpg
 ```
 
+<p align="center">
+  <img src="misc/images/pixer-hello.jpg" width="620"
+       alt="A G+ Pixer frame displaying an image sent by PixerTool">
+</p>
+
 ## The device
 
 | | |
@@ -22,9 +27,10 @@ python3 pixer_upload.py photo.jpg
 | Battery | Li-ion 8000 mAh |
 | Regions | CN / US / JP / RU / TW |
 
-A single image is 1,314,144 bytes on the wire. Over the frame's single-stream
-802.11n radio that is a few seconds of transfer, followed by tens of seconds of
-panel refresh.
+A single image is 1,314,144 bytes on the wire. The frame's single-stream
+802.11n radio has been measured at about 0.3 MB/s, so roughly four seconds per
+upload. The frame acknowledges as soon as it holds the image and redraws its
+panel afterwards.
 
 ## How it works
 
@@ -84,25 +90,15 @@ python3 pixer_upload.py photo.jpg
 
 Before converting anything, an upload checks that the frame is actually
 answering, so a wrong Wi-Fi network fails in a few seconds instead of after the
-image has been processed. The transfer then reports itself on one line:
+image has been processed. The transfer then reports itself on one line, and the
+gap before the frame answers is shown as a running count rather than silence:
 
-```text
-Prepared 1872x1404, 1314144 bytes
-  [████████████░░░░░░░░░░░░░░░░]  45%  0.56/1.25 MB  1.4 MB/s
-```
+![PixerTool uploading an image](misc/images/upload-demo.gif)
 
-Once every byte is sent, the panel can take tens of seconds to refresh, so the
-wait is shown with a running count rather than silence:
-
-```text
-  [████████████████████████████] 100%  1.25/1.25 MB  1.4 MB/s
-  Waiting for the frame to refresh... 18s
-Pixer acknowledged the upload: #end1#
-```
-
-Keep the frame powered and stay connected until that acknowledgement appears.
-When output is piped to a file, progress degrades to one plain line per 10%
-instead of redrawing.
+The uploader waits up to three minutes for the acknowledgement, which in
+practice arrives within a second or two of the last byte. Keep the frame
+powered and stay connected until it appears. When output is piped to a file,
+progress degrades to one plain line per 10% instead of redrawing.
 
 ## Troubleshooting
 
