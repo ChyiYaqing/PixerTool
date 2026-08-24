@@ -70,10 +70,25 @@ python3 pixer_upload.py photo.jpg
 
 Before converting anything, an upload checks that the frame is actually
 answering, so a wrong Wi-Fi network fails in a few seconds instead of after the
-image has been processed.
+image has been processed. The transfer then reports itself on one line:
 
-After the last byte is sent, the panel can take tens of seconds to refresh.
-Keep it powered and stay connected until the acknowledgement is printed.
+```text
+Prepared 1872x1404, 1314144 bytes
+  [████████████░░░░░░░░░░░░░░░░]  45%  0.56/1.25 MB  1.4 MB/s
+```
+
+Once every byte is sent, the panel can take tens of seconds to refresh, so the
+wait is shown with a running count rather than silence:
+
+```text
+  [████████████████████████████] 100%  1.25/1.25 MB  1.4 MB/s
+  Waiting for the frame to refresh... 18s
+Pixer acknowledged the upload: #end1#
+```
+
+Keep the frame powered and stay connected until that acknowledgement appears.
+When output is piped to a file, progress degrades to one plain line per 10%
+instead of redrawing.
 
 ## Troubleshooting
 

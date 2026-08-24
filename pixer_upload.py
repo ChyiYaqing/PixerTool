@@ -16,6 +16,10 @@ from pathlib import Path
 DEFAULT_HOST = "192.168.1.1"
 DEFAULT_PORT = 6000
 PROBE_TIMEOUT = 5.0
+CHUNK_SIZE = 32 * 1024
+BAR_WIDTH = 28
+REDRAW_INTERVAL = 0.1
+MEGABYTE = 1024 * 1024
 WIFI_HINT = 'Join the frame\'s own Wi-Fi network (for example "Pixer 0939"), then retry.'
 LANDSCAPE_SIZE = (1872, 1404)
 PORTRAIT_SIZE = (1404, 1872)
@@ -200,6 +204,70 @@ def file_header(payload_length: int) -> bytes:
     return f"#file#0008{payload_length:08d}imagebin".encode("ascii")
 
 
+class Progress:
+    """Draw upload progress on one line, or as plain lines when redirected."""
+
+    def __init__(self, total: int, stream=None) -> None:
+        self.total = max(total, 1)
+        self.stream = sys.stderr if stream is None else stream
+        self.interactive = self.stream.isatty()
+        self.started = time.monotonic()
+        self.last_draw = 0.0
+        self.next_percent = 10
+        self.announced_wait = False
+        self.dirty = False
+
+    def _redraw(self, text: str) -> None:
+        self.stream.write(f"\r{text}\x1b[K")
+        self.stream.flush()
+        self.dirty = True
+
+    def sent(self, count: int) -> None:
+        now = time.monotonic()
+        percent = (count * 100) // self.total
+        if not self.interactive:
+            if percent >= self.next_percent:
+                self.next_percent = percent - (percent % 10) + 10
+                print(
+                    f"Sent {percent}% "
+                    f"({count / MEGABYTE:.2f}/{self.total / MEGABYTE:.2f} MB)",
+                    file=self.stream,
+                    flush=True,
+                )
+            return
+        if count < self.total and now - self.last_draw < REDRAW_INTERVAL:
+            return
+        self.last_draw = now
+        filled = (BAR_WIDTH * count) // self.total
+        bar = ("\u2588" * filled) + ("\u2591" * (BAR_WIDTH - filled))
+        rate = count / max(now - self.started, 0.001) / MEGABYTE
+        self._redraw(
+            f"  [{bar}] {percent:3d}%  "
+            f"{count / MEGABYTE:.2f}/{self.total / MEGABYTE:.2f} MB  {rate:.1f} MB/s"
+        )
+
+    def waiting(self) -> None:
+        """Show that the frame is refreshing, which can take tens of seconds."""
+        elapsed = time.monotonic() - self.started
+        if not self.interactive:
+            if not self.announced_wait:
+                self.announced_wait = True
+                print("Waiting for the frame to refresh", file=self.stream, flush=True)
+            return
+        if time.monotonic() - self.last_draw < REDRAW_INTERVAL:
+            return
+        self.last_draw = time.monotonic()
+        self._redraw(f"  Waiting for the frame to refresh... {elapsed:.0f}s")
+
+    def close(self) -> None:
+        """End the current line so the next stage starts a fresh one."""
+        self.last_draw = 0.0
+        if self.dirty:
+            self.stream.write("\n")
+            self.stream.flush()
+            self.dirty = False
+
+
 def local_source_address(host: str) -> str | None:
     """Address this computer would use to reach host; no packets are sent."""
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -264,24 +332,23 @@ def upload_payload(
     port: int = DEFAULT_PORT,
     connect_timeout: float = 10.0,
     ack_timeout: float = 180.0,
+    progress_stream=None,
 ) -> bytes:
     header = file_header(len(payload))
     sent = 0
+    progress = Progress(len(payload), stream=progress_stream)
     try:
         with connect_to_pixer(host, port, connect_timeout) as sock:
             sock.sendall(header)
             view = memoryview(payload)
-            chunk_size = 64 * 1024
-            next_report = 10
             while sent < len(payload):
-                end = min(sent + chunk_size, len(payload))
+                end = min(sent + CHUNK_SIZE, len(payload))
                 sock.sendall(view[sent:end])
                 sent = end
-                percent = (sent * 100) // len(payload)
-                if percent >= next_report:
-                    print(f"Sent {percent}%", file=sys.stderr)
-                    next_report += 10
+                progress.sent(sent)
             sock.sendall(b"#MOVE#d")
+            progress.close()
+            progress.started = time.monotonic()
 
             deadline = time.monotonic() + ack_timeout
             acknowledgement = bytearray()
@@ -294,6 +361,7 @@ def upload_payload(
                         "  The frame may still be refreshing; look at it before "
                         "uploading again."
                     )
+                progress.waiting()
                 sock.settimeout(min(1.0, remaining))
                 try:
                     chunk = sock.recv(ACK_SIZE - len(acknowledgement))
@@ -312,6 +380,8 @@ def upload_payload(
             f"{len(payload)} bytes ({percent}%): {exc}\n"
             "  Keep the frame powered and stay on its Wi-Fi, then upload again."
         ) from exc
+    finally:
+        progress.close()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -348,10 +418,10 @@ def main(argv: list[str] | None = None) -> int:
             probe_device(args.host, args.port)
 
         payload, width, height = build_payload(args.image, args.orientation, args.fit)
-        print(f"Prepared {width}x{height}, {len(payload)} bytes")
+        print(f"Prepared {width}x{height}, {len(payload)} bytes", flush=True)
         if args.output_bin:
             args.output_bin.write_bytes(payload)
-            print(f"Saved imagebin: {args.output_bin}")
+            print(f"Saved imagebin: {args.output_bin}", flush=True)
         if args.dry_run:
             return 0
 

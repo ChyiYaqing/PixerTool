@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import socket
 import threading
 import unittest
@@ -47,6 +48,65 @@ class PixerEncodingTests(unittest.TestCase):
         self.assertEqual(
             pixer_upload.file_header(1_314_144),
             b"#file#000801314144imagebin",
+        )
+
+
+class TerminalStream(io.StringIO):
+    """A StringIO that claims to be a terminal."""
+
+    def isatty(self):
+        return True
+
+
+class ProgressTests(unittest.TestCase):
+    def test_redirected_output_stays_line_based(self):
+        stream = io.StringIO()
+        progress = pixer_upload.Progress(1000, stream=stream)
+        for count in range(100, 1001, 100):
+            progress.sent(count)
+        progress.close()
+        lines = stream.getvalue().splitlines()
+        self.assertEqual(len(lines), 10)
+        self.assertEqual(lines[0], "Sent 10% (0.00/0.00 MB)")
+        self.assertEqual(lines[-1], "Sent 100% (0.00/0.00 MB)")
+        self.assertNotIn("\r", stream.getvalue())
+
+    def test_terminal_output_redraws_one_line(self):
+        stream = TerminalStream()
+        progress = pixer_upload.Progress(1000, stream=stream)
+        progress.sent(500)
+        progress.sent(1000)
+        progress.close()
+        output = stream.getvalue()
+        self.assertEqual(output.count("\r"), 2)
+        self.assertEqual(output.count("\n"), 1)
+        self.assertIn("\u2588" * 14 + "\u2591" * 14, output)
+        self.assertIn("100%", output)
+
+    def test_completion_keeps_the_finished_bar(self):
+        stream = TerminalStream()
+        progress = pixer_upload.Progress(1000, stream=stream)
+        progress.sent(1000)
+        progress.close()
+        progress.waiting()
+        progress.close()
+        # str.splitlines would also break on the carriage returns.
+        first, second, _ = stream.getvalue().split("\n")
+        self.assertIn("100%", first)
+        self.assertIn("Waiting for the frame to refresh", second)
+
+    def test_close_is_quiet_when_nothing_was_drawn(self):
+        stream = TerminalStream()
+        pixer_upload.Progress(1000, stream=stream).close()
+        self.assertEqual(stream.getvalue(), "")
+
+    def test_wait_notice_is_printed_once_when_redirected(self):
+        stream = io.StringIO()
+        progress = pixer_upload.Progress(1000, stream=stream)
+        for _ in range(5):
+            progress.waiting()
+        self.assertEqual(
+            stream.getvalue().splitlines(), ["Waiting for the frame to refresh"]
         )
 
 
@@ -125,7 +185,12 @@ class TransferFailureTests(unittest.TestCase):
         self.addCleanup(worker.join)
 
         with self.assertRaises(pixer_upload.PixerError) as caught:
-            pixer_upload.upload_payload(b"\x11" * (2 * 1024 * 1024), "127.0.0.1", port)
+            pixer_upload.upload_payload(
+                b"\x11" * (2 * 1024 * 1024),
+                "127.0.0.1",
+                port,
+                progress_stream=io.StringIO(),
+            )
         message = str(caught.exception)
         self.assertIn("connection to Pixer was lost", message)
         self.assertIn("2097152 bytes", message)

@@ -41,7 +41,7 @@ For a normal Pixer image the complete header is:
 ```
 
 The Android app treats receipt of any six bytes after `#MOVE#d` as success; it
-does not inspect their content.
+does not inspect their content. An observed frame answers `#end1#`.
 
 ## Dormant wake command
 
