@@ -1,0 +1,11 @@
+# Decompiled third-party application code and the original APK.
+# These are proprietary and are intentionally kept out of the repository.
+reverse/
+vendor/
+
+# Generated image payloads
+*.imagebin
+
+__pycache__/
+*.py[cod]
+.DS_Store
