@@ -168,6 +168,51 @@ class ConnectionDiagnosticsTests(unittest.TestCase):
         self.assertIn("cannot reach Pixer", str(caught.exception))
 
 
+class WifiSetupTests(unittest.TestCase):
+    EMPTY_SCAN = b"00" + bytes(32) + b"0"
+    DEVICE_ID = b"0123456789AB@1234TEST5678"
+
+    def setUp(self):
+        connection = unittest.mock.patch.object(pixer_upload, "connect_to_pixer")
+        self.socket = connection.start().return_value.__enter__.return_value
+        self.addCleanup(connection.stop)
+        password = unittest.mock.patch.object(pixer_upload.getpass, "getpass", return_value="example-password")
+        password.start()
+        self.addCleanup(password.stop)
+
+    def test_setup_accepts_the_stock_empty_scan_and_25_byte_device_id(self):
+        self.socket.makefile.return_value = io.BytesIO(
+            self.EMPTY_SCAN + b"#SMAC#" + self.DEVICE_ID
+        )
+
+        self.assertEqual(pixer_upload.setup_wifi("Home-WiFi"), self.DEVICE_ID)
+        scan, settings, acknowledgement = [call.args[0] for call in self.socket.sendall.call_args_list]
+        self.assertEqual(scan, b"#SSID#")
+        self.assertEqual(len(settings), 134)
+        self.assertEqual(settings[:6], b"#UPDT#")
+        self.assertEqual(settings[6:38], b"Home-WiFi".ljust(32, b"\x00"))
+        self.assertEqual(settings[38:70], b"example-password".ljust(32, b"\x00"))
+        self.assertEqual(settings[70:120], b"pixer@pixer.invalid".ljust(50, b"\x00"))
+        self.assertRegex(settings[120:], rb"^2[0-9]{4}[0-9a-f]{8}1$")
+        self.assertEqual(acknowledgement, b"#MACS#")
+
+    def test_setup_withholds_settings_on_unexpected_scan(self):
+        self.socket.makefile.return_value = io.BytesIO(b"00")
+
+        with self.assertRaisesRegex(pixer_upload.PixerError, "expected Wi-Fi scan response"):
+            pixer_upload.setup_wifi("Home-WiFi")
+
+        self.socket.sendall.assert_called_once_with(b"#SSID#")
+
+    def test_setup_reports_uncertainty_when_configuration_is_not_acknowledged(self):
+        self.socket.makefile.return_value = io.BytesIO(self.EMPTY_SCAN + b"#SMAC#short")
+
+        with self.assertRaisesRegex(pixer_upload.PixerError, "Wi-Fi setup could not be confirmed"):
+            pixer_upload.setup_wifi("Home-WiFi")
+
+        self.assertEqual(self.socket.sendall.call_count, 2)
+
+
 class TransferFailureTests(unittest.TestCase):
     def test_dropped_connection_reports_progress(self):
         listener = socket.socket()

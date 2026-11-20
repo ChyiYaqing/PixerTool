@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
-"""Upload an image directly to a G+ Pixer frame over its local Wi-Fi."""
+"""Configure Wi-Fi or upload an image to a G+ Pixer frame."""
 
 from __future__ import annotations
 
 import argparse
+import getpass
 import ipaddress
+import secrets
 import shutil
 import socket
 import subprocess
 import sys
 import time
+import warnings
 from pathlib import Path
 
 
 DEFAULT_HOST = "192.168.1.1"
 DEFAULT_PORT = 6000
 PROBE_TIMEOUT = 5.0
+PAIRING_TIMEOUT = 30.0
 CHUNK_SIZE = 32 * 1024
 BAR_WIDTH = 28
 REDRAW_INTERVAL = 0.1
@@ -282,6 +286,11 @@ def local_source_address(host: str) -> str | None:
 
 def network_advice(host: str) -> str:
     """Explain, from the local routing table, why the frame is out of reach."""
+    if host != DEFAULT_HOST:
+        return (
+            "Check the frame's current IP address and whether the network allows "
+            "this computer to reach it. The frame may also be asleep."
+        )
     try:
         target = ipaddress.IPv4Address(host)
     except ipaddress.AddressValueError:
@@ -324,6 +333,58 @@ def connect_to_pixer(host: str, port: int, timeout: float) -> socket.socket:
 
 def probe_device(host: str, port: int, timeout: float = PROBE_TIMEOUT) -> None:
     connect_to_pixer(host, port, timeout).close()
+
+
+def wifi_field(value: str, name: str) -> bytes:
+    encoded = value.encode("utf-8")
+    if not 1 <= len(encoded) <= 32 or b"\x00" in encoded:
+        raise PixerError(f"{name} must be 1 to 32 UTF-8 bytes with no NUL bytes")
+    return encoded.ljust(32, b"\x00")
+
+
+def setup_wifi(ssid: str) -> bytes:
+    ssid_field = wifi_field(ssid, "Wi-Fi name")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            password = getpass.getpass(f"WPA2 password for {ssid!r}: ")
+    except (EOFError, getpass.GetPassWarning) as exc:
+        raise PixerError("enter the Wi-Fi password in an interactive terminal") from exc
+    if len(password.encode("utf-8")) < 8:
+        raise PixerError("the WPA2 password must be at least 8 bytes long")
+    password_field = wifi_field(password, "Wi-Fi password")
+    account = b"pixer@pixer.invalid".ljust(50, b"\x00")
+    token = f"{secrets.randbelow(10_000):04d}{secrets.randbits(32):08x}".encode("ascii")
+    settings = b"#UPDT#" + ssid_field + password_field + account + b"2" + token + b"1"
+
+    with connect_to_pixer(DEFAULT_HOST, DEFAULT_PORT, PROBE_TIMEOUT) as sock, sock.makefile("rb") as reply:
+        sock.settimeout(PAIRING_TIMEOUT)
+        try:
+            sock.sendall(b"#SSID#")
+            count = reply.read(2)
+            if len(count) != 2 or not count.isdigit():
+                raise PixerError("Pixer did not return a valid Wi-Fi scan count")
+            # Stock direct-mode firmware sends one blank record with count 00.
+            scan_size = 33 * max(1, int(count))
+            scan = reply.read(scan_size)
+            if len(scan) != scan_size or (count == b"00" and scan != bytes(32) + b"0"):
+                raise PixerError("Pixer did not return the expected Wi-Fi scan response")
+        except OSError as exc:
+            raise PixerError("could not read the Pixer Wi-Fi scan response") from exc
+        try:
+            sock.sendall(settings)
+            if reply.read(6) != b"#SMAC#":
+                raise PixerError("missing #SMAC# response")
+            device_id = reply.read(25)
+            if len(device_id) != 25 or device_id[12:13] != b"@":
+                raise PixerError("incomplete device identifier")
+            sock.sendall(b"#MACS#")
+        except (OSError, PixerError) as exc:
+            raise PixerError(
+                f"Wi-Fi setup could not be confirmed ({exc}). Check whether the "
+                "frame joined the target network before trying again."
+            ) from exc
+        return device_id
 
 
 def upload_payload(
@@ -375,10 +436,11 @@ def upload_payload(
         raise
     except OSError as exc:
         percent = (sent * 100) // len(payload) if payload else 0
+        network = "its Wi-Fi" if host == DEFAULT_HOST else "a network that can reach it"
         raise PixerError(
             f"the connection to Pixer was lost after sending {sent} of "
             f"{len(payload)} bytes ({percent}%): {exc}\n"
-            "  Keep the frame powered and stay on its Wi-Fi, then upload again."
+            f"  Keep the frame powered and stay on {network}, then upload again."
         ) from exc
     finally:
         progress.close()
@@ -399,13 +461,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fit", choices=("cover", "contain"), default="cover")
     parser.add_argument("--output-bin", type=Path, help="save converted imagebin data")
     parser.add_argument("--dry-run", action="store_true", help="convert only; do not contact Pixer")
-    parser.add_argument("--probe", action="store_true", help="only test TCP port 6000")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--probe", action="store_true", help="only test the TCP upload port")
+    mode.add_argument("--setup-wifi", metavar="SSID", help="join a WPA2 network from the frame's hotspot")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.setup_wifi is not None:
+            if args.image is not None or args.dry_run or args.output_bin is not None:
+                raise PixerError("--setup-wifi cannot be combined with image conversion")
+            if (args.host, args.port) != (DEFAULT_HOST, DEFAULT_PORT):
+                raise PixerError("--setup-wifi requires the frame's default hotspot address")
+            device_id = setup_wifi(args.setup_wifi)
+            print(f"Pixer acknowledged the Wi-Fi settings (ID {device_id!r}).")
+            print("Check the router's client list to confirm that the frame joined.")
+            return 0
         if args.probe:
             probe_device(args.host, args.port)
             print(f"Pixer upload service is reachable at {args.host}:{args.port}")
@@ -435,7 +508,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        print("\ninterrupted before the upload finished", file=sys.stderr)
+        operation = "Wi-Fi setup" if args.setup_wifi is not None else "upload"
+        print(f"\ninterrupted before the {operation} finished", file=sys.stderr)
         return 130
 
 

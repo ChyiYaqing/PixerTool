@@ -52,3 +52,33 @@ does not inspect their content. A 7.8" Pixer running stock firmware answers
 The APK also contains an unused UDP/6000 wake routine. It sends `#WAKE#N` and
 expects `#WKED#`. Because no live call site exists in 3.06.2, the Mac tool does
 not depend on it.
+
+## Wi-Fi setup
+
+The Android app's `PairingActivity` uses TCP port 6000 on the frame's hotspot.
+It sends `#SSID#` and reads a two-digit ASCII count, then one 33-byte record per
+network. Each record contains a 32-byte NUL-padded SSID and one ASCII security
+type. Type `0` represents an open network.
+
+Stock direct-mode firmware can return a fixed `00` followed by one blank
+33-byte record with type `0`. PixerTool recognizes that response and uses
+type `2` for the requested WPA2-Personal network.
+
+The 134-byte setup request contains these fields in order. Text fields use UTF-8.
+
+| Field | Bytes |
+| --- | ---: |
+| `#UPDT#` | 6 |
+| SSID, NUL-padded | 32 |
+| Password, NUL-padded or all zero for an open network | 32 |
+| Account identifier, NUL-padded | 50 |
+| Security type (`2` for WPA/WPA2-Personal) | 1 |
+| Token with four decimal and eight lowercase hexadecimal digits | 12 |
+| Official server selector (`1`) | 1 |
+
+PixerTool uses `pixer@pixer.invalid` as a local account identifier. The frame
+returns `#SMAC#` followed by a 25-byte device identifier in the form
+`MAC@serial`, which the sender acknowledges with `#MACS#`. The original app
+then checked connection status through its cloud service. PixerTool uses the
+router's client list to confirm association separately. The setup request
+travels in plaintext over the hotspot.

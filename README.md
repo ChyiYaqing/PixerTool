@@ -53,7 +53,7 @@ The full wire format is documented in [PROTOCOL.md](PROTOCOL.md).
 
 - Python 3.9 or newer (no packages to install)
 - `ffmpeg` and `ffprobe` on `PATH` — `brew install ffmpeg`
-- The computer joined to the Pixer's own Wi-Fi network (for example, `Pixer 0939`)
+- A connection to the Pixer hotspot (for example, `Pixer 0939`) or a network that can reach the configured frame
 
 ## Usage
 
@@ -77,16 +77,46 @@ Upload for real:
 python3 pixer_upload.py photo.jpg
 ```
 
+### Join an existing Wi-Fi network
+
+Connect to the hotspot broadcast by your own frame, then run this one-time
+setup command:
+
+```bash
+python3 pixer_upload.py --setup-wifi Home-WiFi
+```
+
+Use a 2.4 GHz WPA2-Personal network. The command prompts for the password
+without echoing it and sends it over the frame's hotspot in plaintext. Stock
+direct-mode firmware can report an empty Wi-Fi scan even with networks in
+range, so the command uses the network name you provide. The frame may drop
+its hotspot while joining.
+
+A setup acknowledgement means the frame received the settings. Check the router's
+client list to confirm the frame joined, then find its IP address. From the
+computer that will run the scheduled job, check TCP reachability and send a photo:
+
+```bash
+python3 pixer_upload.py --probe --host FRAME_IP
+python3 pixer_upload.py photo.jpg --host FRAME_IP
+```
+
+If both commands work, reserve the frame's IP address on the router and use the
+upload command in the scheduler. Repeat the check after a normal restart and
+after the frame has been idle to confirm it reconnects and accepts unattended
+uploads. LAN upload and wake behavior depend on the frame firmware.
+
 ### Options
 
 | Option | Default | Description |
 | --- | --- | --- |
 | `--orientation {auto,landscape,portrait}` | `auto` | Chosen from the source image's aspect ratio when `auto`. |
 | `--fit {cover,contain}` | `cover` | `cover` crops to fill the panel; `contain` letterboxes on white. |
-| `--host` / `--port` | `192.168.1.1` / `6000` | Frame address in direct mode. |
+| `--host` / `--port` | `192.168.1.1` / `6000` | Frame address and port. Defaults are for direct mode. |
 | `--output-bin PATH` | — | Write the packed payload to a file. |
 | `--dry-run` | off | Convert only; never open a socket. |
 | `--probe` | off | Test TCP reachability and exit. |
+| `--setup-wifi SSID` | off | Send Wi-Fi settings to the frame over its hotspot. |
 
 Before converting anything, an upload checks that the frame is actually
 answering, so a wrong Wi-Fi network fails in a few seconds instead of after the
@@ -136,8 +166,7 @@ rotation), and the header format.
 - Hold 15 seconds — factory reset
 - The restart-pin shipped with the frame drives its pinhole reset
 
-PixerTool never touches Wi-Fi settings or firmware. A successful upload only
-replaces the displayed image.
+Use `--setup-wifi` to change the frame's Wi-Fi settings.
 
 ## Scope and legal note
 
