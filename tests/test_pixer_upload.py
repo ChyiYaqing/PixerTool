@@ -213,6 +213,146 @@ class WifiSetupTests(unittest.TestCase):
         self.assertEqual(self.socket.sendall.call_count, 2)
 
 
+class ScriptedSocket:
+    """Answer each command with scripted chunks, then fall silent."""
+
+    def __init__(self, replies):
+        self.replies = replies
+        self.sent = []
+        self.pending = []
+        self.timeout = None
+        self.send_timeouts = []
+
+    def sendall(self, data):
+        self.sent.append(data)
+        self.send_timeouts.append(self.timeout)
+        self.pending = list(self.replies.get(data, []))
+
+    def settimeout(self, timeout):
+        self.timeout = timeout
+
+    def recv(self, size):
+        if not self.pending:
+            raise socket.timeout("timed out")
+        return self.pending.pop(0)
+
+
+class StatusTests(unittest.TestCase):
+    DIRECT = {
+        b"#TEST#": [b"Hello PC!"],
+        b"bleVersion": [b"1.0.7"],
+        b"iteVersion": [b"2.3"],
+        b"mcuVersion": [b"mcu_test_version"],
+        b"batteryLevel": [b"85"],
+    }
+
+    def frame(self, replies):
+        connection = unittest.mock.patch.object(pixer_upload, "connect_to_pixer")
+        self.connect = connection.start()
+        self.addCleanup(connection.stop)
+        sock = ScriptedSocket(replies)
+        self.connect.return_value.__enter__.return_value = sock
+        return sock
+
+    def test_direct_status_follows_the_app_query_order(self):
+        sock = self.frame(self.DIRECT)
+
+        status = pixer_upload.read_status("192.168.1.1", 6000)
+
+        self.assertEqual(
+            sock.sent,
+            [b"#TEST#", b"bleVersion", b"iteVersion", b"mcuVersion", b"batteryLevel"],
+        )
+        self.assertEqual(
+            status,
+            {
+                "Battery": "85%",
+                "BLE firmware": "1.0.7",
+                "Display firmware": "2.3",
+                "MCU firmware": "mcu_test_version",
+            },
+        )
+
+    def test_direct_status_joins_a_reply_split_across_segments(self):
+        self.frame({**self.DIRECT, b"#TEST#": [b"Hello ", b"PC!"], b"batteryLevel": [b"8", b"5"]})
+
+        status = pixer_upload.read_status("192.168.1.1", 6000)
+
+        self.assertEqual(status["Battery"], "85%")
+        self.assertEqual(status["BLE firmware"], "1.0.7")
+
+    def test_long_greeting_supplies_the_ble_version(self):
+        sock = self.frame({**self.DIRECT, b"#TEST#": [b"Hello PC!1.0.8"], b"bleVersion": []})
+
+        status = pixer_upload.read_status("192.168.1.1", 6000)
+
+        self.assertEqual(status["BLE firmware"], "1.0.8")
+        self.assertEqual(status["Display firmware"], "2.3")
+        self.assertIn(b"bleVersion", sock.sent)
+
+    def test_long_greeting_discards_a_late_ble_reply(self):
+        self.frame({**self.DIRECT, b"#TEST#": [b"Hello PC!1.0.8"]})
+
+        status = pixer_upload.read_status("192.168.1.1", 6000)
+
+        self.assertEqual(status["BLE firmware"], "1.0.8")
+        self.assertEqual(status["Display firmware"], "2.3")
+
+    def test_every_command_is_sent_with_the_full_timeout(self):
+        sock = self.frame({**self.DIRECT, b"#TEST#": [b"Hello PC!1.0.8"]})
+        sock.timeout = 5.0
+
+        pixer_upload.read_status("192.168.1.1", 6000, timeout=5.0)
+
+        self.assertEqual(sock.send_timeouts, [5.0] * 5)
+
+    def test_device_text_cannot_inject_terminal_control_codes(self):
+        self.frame({**self.DIRECT, b"iteVersion": [b"2.3\x1b[2K\rBattery: 100%"]})
+
+        status = pixer_upload.read_status("192.168.1.1", 6000)
+
+        self.assertEqual(status["Display firmware"], "2.3\\x1b[2K\\rBattery: 100%")
+
+    def test_direct_status_stops_on_an_unexpected_greeting(self):
+        sock = self.frame({b"#TEST#": [b"#end1#"]})
+
+        with self.assertRaisesRegex(pixer_upload.PixerError, "unexpected reply to #TEST#"):
+            pixer_upload.read_status("192.168.1.1", 6000)
+
+        self.assertEqual(sock.sent, [b"#TEST#"])
+
+    def test_direct_status_rejects_impossible_battery_levels(self):
+        for level in (b"full", b"101"):
+            with self.subTest(level=level):
+                self.frame({**self.DIRECT, b"batteryLevel": [level]})
+                with self.assertRaisesRegex(pixer_upload.PixerError, "battery level"):
+                    pixer_upload.read_status("192.168.1.1", 6000)
+
+    def test_direct_status_names_the_command_that_went_unanswered(self):
+        self.frame({**self.DIRECT, b"mcuVersion": []})
+
+        with self.assertRaisesRegex(pixer_upload.PixerError, "did not answer mcuVersion"):
+            pixer_upload.read_status("192.168.1.1", 6000)
+
+    def test_cli_prints_the_status_for_any_host(self):
+        self.frame(self.DIRECT)
+        with unittest.mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.assertEqual(pixer_upload.main(["--status", "--host", "10.0.0.5"]), 0)
+
+        self.connect.assert_called_once_with("10.0.0.5", 6000, pixer_upload.PROBE_TIMEOUT)
+        self.assertIn("Pixer at 10.0.0.5:6000", out.getvalue())
+        self.assertIn("  Battery: 85%", out.getvalue())
+        self.assertIn("  MCU firmware: mcu_test_version", out.getvalue())
+
+    def test_cli_status_refuses_dry_run_without_connecting(self):
+        self.frame({})
+        with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(pixer_upload.main(["--status", "--dry-run"]), 1)
+
+        self.assertIn("cannot be combined", err.getvalue())
+        self.connect.assert_not_called()
+
+
 class TransferFailureTests(unittest.TestCase):
     def test_dropped_connection_reports_progress(self):
         listener = socket.socket()

@@ -47,6 +47,44 @@ The Android app treats receipt of any six bytes after `#MOVE#d` as success; it
 does not inspect their content. A 7.8" Pixer running stock firmware answers
 `#end1#`.
 
+## Status queries
+
+The app's hotspot check (`MainActivityV2.checkPixer`) sends each command
+without a separator and treats its next read of up to 64 bytes as the reply.
+On a 7.8" frame with MCU firmware `GBT_170206-1_7.8A`, reached over a home
+network, each reply arrived in a single read with no terminator, 8 to 210 ms
+after the command:
+
+| Command | Reply | Measured reply |
+| --- | --- | --- |
+| `#TEST#` | Greeting | `Hello PC!` |
+| `bleVersion` | BLE firmware version | `GBT_BLE_v.A.14` |
+| `iteVersion` | Display controller firmware version | `GBT_v.A.35` |
+| `mcuVersion` | MCU firmware version | `GBT_170206-1_7.8A` |
+| `batteryLevel` | Battery percentage | `100` |
+
+When the greeting is longer than 9 characters, the app takes the text after
+the first 9 as the BLE version and sends `bleVersion` without reading a
+reply. That firmware variant has not been observed. PixerTool reads the BLE
+version this way only when the longer greeting starts with `Hello PC!`, then
+sends `bleVersion` and discards anything that arrives within 0.3 seconds. When the MCU version
+has at least three `_`-separated fields, the app reads the second field, with
+`-` removed, as a build number (`1702061` above).
+
+TCP does not preserve message boundaries, so PixerTool keeps reading a reply
+until the frame has been quiet for 0.3 seconds, 64 bytes have arrived, or the
+connection closes.
+
+The app's device page (`FrameInfoActivity.ConnTask`) instead sends `#STAT#`
+to the address and port advertised by the mDNS service `_gigazone._tcp`, and
+reads until `#END#`. The same frame answered with three comma-separated
+fields: the 25-byte `MAC@serial` device identifier, the battery percentage,
+and `#END#`. PixerTool does not send this query.
+
+The app also sends commands that unpair the frame (`#TOFF#`, `#CLBT#`) and
+that query or install firmware (`mcuImage`, `sendFile`). PixerTool does not
+send them.
+
 ## Dormant wake command
 
 The APK also contains an unused UDP/6000 wake routine. It sends `#WAKE#N` and
