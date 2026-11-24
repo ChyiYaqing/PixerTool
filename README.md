@@ -42,8 +42,8 @@ levels, two pixels packed per byte, preceded by a short ASCII header:
 #file#000801314144imagebin<1314144 bytes><#MOVE#d>
 ```
 
-Getting an image to look right on the panel means matching the app's pipeline
-exactly: integer Rec. 601 grayscale, a one-dimensional error-diffusion dither
+By default the image goes through the app's pipeline
+exactly: integer Rec. 601 grayscale, a single-row error-diffusion dither
 with a divisor of 17, and Java's truncate-toward-zero integer division. Those
 steps are reproduced byte-for-byte here and covered by unit tests.
 
@@ -75,6 +75,37 @@ Upload for real:
 
 ```bash
 python3 pixer_upload.py photo.jpg
+```
+
+### Choose a dither
+
+The panel shows 16 grays, so every image is quantized to 16 gray levels. The
+default, `app`, reproduces the original app's grayscale and dither steps byte
+for byte: an error diffusion that keeps a single row of pending error. Three
+alternatives are available:
+
+| `--dither` | Character |
+| --- | --- |
+| `app` | The original app's output. |
+| `floyd-steinberg` | Spreads error in two dimensions; smoothest gradients for photos. |
+| `atkinson` | Discards a quarter of the error; cleaner flats and more contrast, at the cost of shadow and highlight detail. |
+| `none` | Rounds each pixel to the nearest gray; for line art and text. |
+
+```bash
+python3 pixer_upload.py photo.jpg --dither floyd-steinberg
+```
+
+The three alternatives read white as exactly white. The app's grayscale step
+turns white into 254. The app's own dither absorbs that, but Floyd–Steinberg
+would turn it into scattered gray specks on a white background.
+
+To judge them on the panel itself, push the test card. Its top third shows the
+16 grays in order, the middle a smooth ramp rendered by the chosen dither, and
+the bottom black-and-white stripes 1 to 4 pixels wide:
+
+```bash
+python3 misc/make_test_card.py card.pgm
+python3 pixer_upload.py card.pgm --dither atkinson
 ```
 
 ### Find the frame on your network
@@ -155,6 +186,7 @@ python3 pixer_upload.py photo.jpg --host FRAME_IP --min-battery 15
 | --- | --- | --- |
 | `--orientation {auto,landscape,portrait}` | `auto` | Chosen from the source image's aspect ratio when `auto`. |
 | `--fit {cover,contain}` | `cover` | `cover` crops to fill the panel; `contain` letterboxes on white. |
+| `--dither {app,floyd-steinberg,atkinson,none}` | `app` | How the image is reduced to 16 grays. See [Choose a dither](#choose-a-dither). |
 | `--host` / `--port` | `192.168.1.1` / `6000` | Frame address and port. Defaults are for direct mode. |
 | `--output-bin PATH` | — | Write the packed payload to a file. |
 | `--dry-run` | off | Convert only; never open a socket. |
