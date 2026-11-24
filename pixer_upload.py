@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 
@@ -31,6 +32,9 @@ ACK_SIZE = 6
 STATUS_REPLY_SIZE = 64
 STATUS_GREETING = "Hello PC!"
 STATUS_QUIET_GAP = 0.3
+DISCOVER_TIMEOUT = 1.0
+DISCOVER_WORKERS = 64
+DISCOVER_MAX_HOSTS = 1024
 
 
 class PixerError(RuntimeError):
@@ -424,6 +428,48 @@ def read_status(host: str, port: int, timeout: float = PROBE_TIMEOUT) -> dict[st
     return {"Battery": battery_percent(battery), **status}
 
 
+def is_pixer(host: str, port: int, timeout: float = DISCOVER_TIMEOUT) -> bool:
+    """Tell a Pixer from any other service on the port by its #TEST# greeting."""
+    expected = STATUS_GREETING.encode("ascii")
+    reply = b""
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            sock.sendall(b"#TEST#")
+            deadline = time.monotonic() + timeout
+            while len(reply) < len(expected):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                sock.settimeout(remaining)
+                chunk = sock.recv(len(expected) - len(reply))
+                if not chunk:
+                    break
+                reply += chunk
+    except OSError:
+        return False
+    return reply == expected
+
+
+def local_network() -> ipaddress.IPv4Network:
+    """The /24 around the address this computer uses for its default route,
+    or for the frame's hotspot when there is no default route."""
+    source = local_source_address("192.0.2.1") or local_source_address(DEFAULT_HOST)
+    if source is None:
+        raise PixerError("this computer has no network route; pass a network such as 10.1.7.0/24")
+    return ipaddress.ip_network(f"{source}/24", strict=False)
+
+
+def discover(network: ipaddress.IPv4Network, port: int, timeout: float = DISCOVER_TIMEOUT) -> list[str]:
+    if network.num_addresses > DISCOVER_MAX_HOSTS:
+        raise PixerError(
+            f"{network} has {network.num_addresses} addresses; scan at most {DISCOVER_MAX_HOSTS}"
+        )
+    hosts = [str(host) for host in network.hosts()]
+    with ThreadPoolExecutor(DISCOVER_WORKERS) as pool:
+        answers = pool.map(lambda host: is_pixer(host, port, timeout), hosts)
+        return [host for host, answered in zip(hosts, answers) if answered]
+
+
 def wifi_field(value: str, name: str) -> bytes:
     encoded = value.encode("utf-8")
     if not 1 <= len(encoded) <= 32 or b"\x00" in encoded:
@@ -535,13 +581,20 @@ def upload_payload(
         progress.close()
 
 
+def tcp_port(text: str) -> int:
+    port = int(text)
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("must be between 1 and 65535")
+    return port
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Upload an image directly to a G+ Pixer frame"
     )
     parser.add_argument("image", nargs="?", type=Path, help="JPEG, PNG, HEIC, or other ffmpeg-readable image")
-    parser.add_argument("--host", default=DEFAULT_HOST)
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--host", help=f"frame address (default: {DEFAULT_HOST})")
+    parser.add_argument("--port", type=tcp_port, default=DEFAULT_PORT)
     parser.add_argument(
         "--orientation",
         choices=("auto", "landscape", "portrait"),
@@ -553,12 +606,22 @@ def build_parser() -> argparse.ArgumentParser:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--probe", action="store_true", help="only test the TCP upload port")
     mode.add_argument("--status", action="store_true", help="read battery level and firmware versions")
+    mode.add_argument(
+        "--discover",
+        nargs="?",
+        const="",
+        metavar="NETWORK",
+        help="find frames on NETWORK (default: this computer's /24)",
+    )
     mode.add_argument("--setup-wifi", metavar="SSID", help="join a WPA2 network from the frame's hotspot")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    host_given = args.host is not None
+    if not host_given:
+        args.host = DEFAULT_HOST
     try:
         if args.setup_wifi is not None:
             if args.image is not None or args.dry_run or args.output_bin is not None:
@@ -567,15 +630,38 @@ def main(argv: list[str] | None = None) -> int:
                 raise PixerError("--setup-wifi requires the frame's default hotspot address")
             device_id = setup_wifi(args.setup_wifi)
             print(f"Pixer acknowledged the Wi-Fi settings (ID {device_id!r}).")
-            print("Check the router's client list to confirm that the frame joined.")
+            print("Join that network and run --discover to find the frame's IP address.")
             return 0
         if args.probe:
             probe_device(args.host, args.port)
             print(f"Pixer upload service is reachable at {args.host}:{args.port}")
             return 0
-        if args.status:
+        if args.status or args.discover is not None:
             if args.image is not None or args.dry_run or args.output_bin is not None:
-                raise PixerError("--status cannot be combined with image conversion")
+                flag = "--status" if args.status else "--discover"
+                raise PixerError(f"{flag} cannot be combined with image conversion")
+        if args.discover is not None:
+            if host_given:
+                raise PixerError("--discover finds the host itself; use --discover NETWORK instead of --host")
+            try:
+                network = (
+                    ipaddress.IPv4Network(args.discover, strict=False)
+                    if args.discover
+                    else local_network()
+                )
+            except ValueError as exc:
+                raise PixerError(f"not an IPv4 network: {args.discover!r}") from exc
+            print(f"Scanning {network} for Pixer frames on port {args.port}...", flush=True)
+            found = discover(network, args.port)
+            if not found:
+                raise PixerError(
+                    f"no Pixer frame answered on {network}. Wake the frame with one "
+                    "short press and try again."
+                )
+            for host in found:
+                print(f"Found Pixer at {host}")
+            return 0
+        if args.status:
             status = read_status(args.host, args.port)
             print(f"Pixer at {args.host}:{args.port}")
             for label, value in status.items():
@@ -606,7 +692,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        operation = "Wi-Fi setup" if args.setup_wifi is not None else "upload"
+        if args.setup_wifi is not None:
+            operation = "Wi-Fi setup"
+        elif args.discover is not None:
+            operation = "scan"
+        else:
+            operation = "upload"
         print(f"\ninterrupted before the {operation} finished", file=sys.stderr)
         return 130
 

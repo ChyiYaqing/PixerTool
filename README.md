@@ -77,6 +77,22 @@ Upload for real:
 python3 pixer_upload.py photo.jpg
 ```
 
+### Find the frame on your network
+
+```bash
+python3 pixer_upload.py --discover
+```
+
+This connects to port 6000 on every address in a /24 network and lists the
+hosts that answer the status greeting `#TEST#` with `Hello PC!`. Any other
+service listening on that port also receives `#TEST#`, so scan only networks
+you are allowed to probe. A scan of a /24 takes about four seconds.
+
+By default the scan covers the /24 around the address this computer uses for
+its default route, or for the frame's hotspot when there is none. To scan
+another network, name it, for example `--discover 10.1.0.0/22`. A sleeping
+frame does not answer, so press its button once before scanning.
+
 ### Read battery and firmware status
 
 ```bash
@@ -110,9 +126,10 @@ direct-mode firmware can report an empty Wi-Fi scan even with networks in
 range, so the command uses the network name you provide. The frame may drop
 its hotspot while joining.
 
-A setup acknowledgement means the frame received the settings. Check the router's
-client list to confirm the frame joined, then find its IP address. From the
-computer that will run the scheduled job, check TCP reachability and send a photo:
+A setup acknowledgement means the frame received the settings. Join the
+target network, then run `--discover` to confirm the frame joined and find its
+IP address. The router's client list shows the same. From the computer that
+will run the scheduled job, check TCP reachability and send a photo:
 
 ```bash
 python3 pixer_upload.py --probe --host FRAME_IP
@@ -135,6 +152,7 @@ uploads. LAN upload and wake behavior depend on the frame firmware.
 | `--dry-run` | off | Convert only; never open a socket. |
 | `--probe` | off | Test TCP reachability and exit. |
 | `--status` | off | Read the battery level and firmware versions, then exit. |
+| `--discover [NETWORK]` | off | List frames on NETWORK, or on this computer's /24 network, then exit. |
 | `--setup-wifi SSID` | off | Send Wi-Fi settings to the frame over its hotspot. |
 
 Before converting anything, an upload checks that the frame is actually
