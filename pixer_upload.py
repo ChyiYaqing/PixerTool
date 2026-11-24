@@ -35,6 +35,13 @@ STATUS_QUIET_GAP = 0.3
 DISCOVER_TIMEOUT = 1.0
 DISCOVER_WORKERS = 64
 DISCOVER_MAX_HOSTS = 1024
+# Error-diffusion kernels as (dx, dy, weight); Atkinson drops 2/8 of the error.
+DIFFUSION_KERNELS = {
+    "floyd-steinberg": ((1, 0, 7 / 16), (-1, 1, 3 / 16), (0, 1, 5 / 16), (1, 1, 1 / 16)),
+    "atkinson": tuple((dx, dy, 1 / 8) for dx, dy in ((1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2))),
+    "none": (),
+}
+DITHER_METHODS = ("app", *DIFFUSION_KERNELS)
 
 
 class PixerError(RuntimeError):
@@ -128,11 +135,16 @@ def convert_to_rgb(
     return result.stdout
 
 
-def rgb_to_gray(rgb: bytes, width: int, height: int) -> bytes:
-    """Match the app's default integer Rec. 601 grayscale conversion."""
+def rgb_to_gray(rgb: bytes, width: int, height: int, rounded: bool = False) -> bytes:
+    """Match the app's integer Rec. 601 grayscale conversion.
+
+    The app's weights sum to 65535 and truncate, so white becomes 254. The
+    rounded variant keeps neutral grays exact.
+    """
     expected = width * height * 3
     if len(rgb) != expected:
         raise ValueError(f"RGB buffer is {len(rgb)} bytes; expected {expected}")
+    bias = 32768 if rounded else 0
     gray = bytearray(width * height)
     for pixel in range(width * height):
         source = pixel * 3
@@ -140,6 +152,7 @@ def rgb_to_gray(rgb: bytes, width: int, height: int) -> bytes:
             (rgb[source] * 19595)
             + (rgb[source + 1] * 38469)
             + (rgb[source + 2] * 7471)
+            + bias
         ) >> 16
     return bytes(gray)
 
@@ -168,6 +181,29 @@ def dither_16_levels(gray: bytes, width: int, height: int) -> bytearray:
                 errors[column - 1] += remainder
             if column + 1 < width:
                 errors[column + 1] += remainder * 2
+    return levels
+
+
+def diffuse_16_levels(gray: bytes, width: int, height: int, method: str) -> bytearray:
+    """Quantize to 16 levels, spreading each pixel's error over a 2-D kernel."""
+    expected = width * height
+    if len(gray) != expected:
+        raise ValueError(f"gray buffer is {len(gray)} bytes; expected {expected}")
+    kernel = DIFFUSION_KERNELS[method]
+    pad = 2
+    rows = [[0.0] * (width + 2 * pad) for _ in range(3)]
+    levels = bytearray(expected)
+    for row in range(height):
+        errors = rows[0]
+        row_offset = row * width
+        for column in range(width):
+            value = gray[row_offset + column] + errors[column + pad]
+            level = min(15, max(0, int(value / 17 + 0.5)))
+            levels[row_offset + column] = level
+            error = value - level * 17
+            for dx, dy, weight in kernel:
+                rows[dy][column + pad + dx] += error * weight
+        rows = rows[1:] + [[0.0] * (width + 2 * pad)]
     return levels
 
 
@@ -201,11 +237,16 @@ def pack_4bit(levels: bytes, width: int, height: int) -> bytes:
     return bytes(packed)
 
 
-def build_payload(image_path: Path, orientation: str, fit: str) -> tuple[bytes, int, int]:
+def build_payload(
+    image_path: Path, orientation: str, fit: str, dither: str = "app"
+) -> tuple[bytes, int, int]:
     width, height = target_size(image_path, orientation)
     rgb = convert_to_rgb(image_path, width, height, fit)
-    gray = rgb_to_gray(rgb, width, height)
-    levels = dither_16_levels(gray, width, height)
+    if dither == "app":
+        levels = dither_16_levels(rgb_to_gray(rgb, width, height), width, height)
+    else:
+        gray = rgb_to_gray(rgb, width, height, rounded=True)
+        levels = diffuse_16_levels(gray, width, height, dither)
     return pack_4bit(levels, width, height), width, height
 
 
@@ -608,6 +649,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
     )
     parser.add_argument("--fit", choices=("cover", "contain"), default="cover")
+    parser.add_argument(
+        "--dither",
+        choices=DITHER_METHODS,
+        default="app",
+        help="how to reduce the image to 16 grays (default: app, the original app's)",
+    )
     parser.add_argument("--output-bin", type=Path, help="save converted imagebin data")
     parser.add_argument("--dry-run", action="store_true", help="convert only; do not contact Pixer")
     parser.add_argument(
@@ -703,7 +750,9 @@ def main(argv: list[str] | None = None) -> int:
         elif not args.dry_run:
             probe_device(args.host, args.port)
 
-        payload, width, height = build_payload(args.image, args.orientation, args.fit)
+        payload, width, height = build_payload(
+            args.image, args.orientation, args.fit, args.dither
+        )
         print(f"Prepared {width}x{height}, {len(payload)} bytes", flush=True)
         if args.output_bin:
             args.output_bin.write_bytes(payload)
