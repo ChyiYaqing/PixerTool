@@ -588,6 +588,13 @@ def tcp_port(text: str) -> int:
     return port
 
 
+def battery_threshold(text: str) -> int:
+    level = int(text)
+    if not 1 <= level <= 100:
+        raise argparse.ArgumentTypeError("must be between 1 and 100")
+    return level
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Upload an image directly to a G+ Pixer frame"
@@ -603,6 +610,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fit", choices=("cover", "contain"), default="cover")
     parser.add_argument("--output-bin", type=Path, help="save converted imagebin data")
     parser.add_argument("--dry-run", action="store_true", help="convert only; do not contact Pixer")
+    parser.add_argument(
+        "--min-battery",
+        type=battery_threshold,
+        metavar="PERCENT",
+        help="skip the upload when the frame's battery is below PERCENT",
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--probe", action="store_true", help="only test the TCP upload port")
     mode.add_argument("--status", action="store_true", help="read battery level and firmware versions")
@@ -623,6 +636,14 @@ def main(argv: list[str] | None = None) -> int:
     if not host_given:
         args.host = DEFAULT_HOST
     try:
+        if args.min_battery is not None and (
+            args.dry_run
+            or args.probe
+            or args.status
+            or args.discover is not None
+            or args.setup_wifi is not None
+        ):
+            raise PixerError("--min-battery only applies to uploads")
         if args.setup_wifi is not None:
             if args.image is not None or args.dry_run or args.output_bin is not None:
                 raise PixerError("--setup-wifi cannot be combined with image conversion")
@@ -671,7 +692,15 @@ def main(argv: list[str] | None = None) -> int:
             raise PixerError("an image path is required unless --probe is used")
         if not args.image.is_file():
             raise PixerError(f"image does not exist: {args.image}")
-        if not args.dry_run:
+        if args.min_battery is not None:
+            battery = int(read_status(args.host, args.port)["Battery"].removesuffix("%"))
+            if battery < args.min_battery:
+                raise PixerError(
+                    f"the frame's battery is {battery}%, below --min-battery "
+                    f"{args.min_battery}%; upload skipped. Charge the frame."
+                )
+            print(f"Battery {battery}%", flush=True)
+        elif not args.dry_run:
             probe_device(args.host, args.port)
 
         payload, width, height = build_payload(args.image, args.orientation, args.fit)

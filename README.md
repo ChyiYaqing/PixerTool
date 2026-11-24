@@ -141,6 +141,14 @@ upload command in the scheduler. Repeat the check after a normal restart and
 after the frame has been idle to confirm it reconnects and accepts unattended
 uploads. LAN upload and wake behavior depend on the frame firmware.
 
+To keep a scheduled job from draining a frame that needs charging, add a
+battery threshold. The upload is then skipped, with exit status 1, when the
+frame reports less than that percentage:
+
+```bash
+python3 pixer_upload.py photo.jpg --host FRAME_IP --min-battery 15
+```
+
 ### Options
 
 | Option | Default | Description |
@@ -150,6 +158,7 @@ uploads. LAN upload and wake behavior depend on the frame firmware.
 | `--host` / `--port` | `192.168.1.1` / `6000` | Frame address and port. Defaults are for direct mode. |
 | `--output-bin PATH` | — | Write the packed payload to a file. |
 | `--dry-run` | off | Convert only; never open a socket. |
+| `--min-battery PERCENT` | off | Read the battery before uploading, and skip the upload below PERCENT. |
 | `--probe` | off | Test TCP reachability and exit. |
 | `--status` | off | Read the battery level and firmware versions, then exit. |
 | `--discover [NETWORK]` | off | List frames on NETWORK, or on this computer's /24 network, then exit. |

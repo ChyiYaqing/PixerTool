@@ -477,6 +477,85 @@ class DiscoveryTests(unittest.TestCase):
         self.assertIn("not an IPv4 network", err.getvalue())
 
 
+class MinimumBatteryTests(unittest.TestCase):
+    def setUp(self):
+        self.image = Path(__file__)
+        patches = {
+            "read_status": unittest.mock.DEFAULT,
+            "probe_device": unittest.mock.DEFAULT,
+            "build_payload": unittest.mock.DEFAULT,
+            "upload_payload": unittest.mock.DEFAULT,
+        }
+        patcher = unittest.mock.patch.multiple(pixer_upload, **patches)
+        self.mocks = patcher.start()
+        self.addCleanup(patcher.stop)
+        self.mocks["build_payload"].return_value = (b"\x00" * 4, 4, 2)
+        self.mocks["upload_payload"].return_value = b"#end1#"
+        self.out = unittest.mock.patch("sys.stdout", new_callable=io.StringIO).start()
+        self.err = unittest.mock.patch("sys.stderr", new_callable=io.StringIO).start()
+        self.addCleanup(unittest.mock.patch.stopall)
+
+    def battery(self, level):
+        self.mocks["read_status"].return_value = {"Battery": f"{level}%", "MCU firmware": "x"}
+
+    def test_low_battery_skips_conversion_and_upload(self):
+        self.battery(12)
+
+        self.assertEqual(pixer_upload.main([str(self.image), "--min-battery", "20"]), 1)
+
+        self.assertIn("12%", self.err.getvalue())
+        self.assertIn("below --min-battery 20%", self.err.getvalue())
+        self.mocks["build_payload"].assert_not_called()
+        self.mocks["upload_payload"].assert_not_called()
+
+    def test_battery_at_the_threshold_uploads(self):
+        self.battery(20)
+
+        self.assertEqual(pixer_upload.main([str(self.image), "--min-battery", "20"]), 0)
+
+        self.mocks["read_status"].assert_called_once_with("192.168.1.1", 6000)
+        self.mocks["probe_device"].assert_not_called()
+        self.mocks["upload_payload"].assert_called_once()
+        self.assertIn("Battery 20%", self.out.getvalue())
+
+    def test_without_the_option_uploads_as_before(self):
+        self.assertEqual(pixer_upload.main([str(self.image)]), 0)
+
+        self.mocks["read_status"].assert_not_called()
+        self.mocks["probe_device"].assert_called_once_with("192.168.1.1", 6000)
+        self.mocks["upload_payload"].assert_called_once()
+
+    def test_the_option_is_refused_outside_uploads(self):
+        for argv in (
+            [str(self.image), "--dry-run"],
+            ["--status"],
+            ["--probe"],
+            ["--discover", "10.0.0.0/30"],
+            ["--discover"],
+            ["--setup-wifi", "Home-WiFi"],
+        ):
+            with self.subTest(argv=argv):
+                self.assertEqual(pixer_upload.main(argv + ["--min-battery", "20"]), 1)
+        self.assertIn("--min-battery only applies to uploads", self.err.getvalue())
+        self.mocks["read_status"].assert_not_called()
+        self.mocks["upload_payload"].assert_not_called()
+
+    def test_an_unreadable_battery_skips_the_upload(self):
+        self.mocks["read_status"].side_effect = pixer_upload.PixerError("Pixer did not answer batteryLevel")
+
+        self.assertEqual(pixer_upload.main([str(self.image), "--min-battery", "20"]), 1)
+
+        self.assertIn("did not answer batteryLevel", self.err.getvalue())
+        self.mocks["build_payload"].assert_not_called()
+        self.mocks["upload_payload"].assert_not_called()
+
+    def test_the_threshold_must_be_a_percentage(self):
+        for value in ("0", "101", "half"):
+            with self.subTest(value=value), self.assertRaises(SystemExit):
+                pixer_upload.main([str(self.image), "--min-battery", value])
+        self.assertIn("between 1 and 100", self.err.getvalue())
+
+
 class TransferFailureTests(unittest.TestCase):
     def test_dropped_connection_reports_progress(self):
         listener = socket.socket()
