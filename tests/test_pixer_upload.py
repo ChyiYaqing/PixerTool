@@ -234,7 +234,10 @@ class ScriptedSocket:
     def recv(self, size):
         if not self.pending:
             raise socket.timeout("timed out")
-        return self.pending.pop(0)
+        chunk = self.pending.pop(0)
+        if len(chunk) > size:
+            self.pending.insert(0, chunk[size:])
+        return chunk[:size]
 
 
 class StatusTests(unittest.TestCase):
@@ -351,6 +354,127 @@ class StatusTests(unittest.TestCase):
 
         self.assertIn("cannot be combined", err.getvalue())
         self.connect.assert_not_called()
+
+
+class DiscoveryTests(unittest.TestCase):
+    def answer(self, *greeting):
+        sock = ScriptedSocket({b"#TEST#": list(greeting)})
+        connection = unittest.mock.patch.object(pixer_upload.socket, "create_connection")
+        connection.start().return_value.__enter__.return_value = sock
+        self.addCleanup(connection.stop)
+        return sock
+
+    def test_a_frame_is_recognized_by_its_greeting(self):
+        sock = self.answer(b"Hello PC!")
+
+        self.assertTrue(pixer_upload.is_pixer("10.0.0.5", 6000))
+        self.assertEqual(sock.sent, [b"#TEST#"])
+
+    def test_another_service_on_the_port_is_not_a_frame(self):
+        self.answer(b"X11 rejected")
+
+        self.assertFalse(pixer_upload.is_pixer("10.0.0.5", 6000))
+
+    def test_silent_or_closed_hosts_are_not_frames(self):
+        self.answer()
+        self.assertFalse(pixer_upload.is_pixer("10.0.0.5", 6000))
+
+        with unittest.mock.patch.object(
+            pixer_upload.socket, "create_connection", side_effect=ConnectionRefusedError()
+        ):
+            self.assertFalse(pixer_upload.is_pixer("10.0.0.6", 6000))
+
+    def test_discover_returns_frames_in_address_order(self):
+        frames = {"10.0.0.3", "10.0.0.6"}
+        with unittest.mock.patch.object(
+            pixer_upload, "is_pixer", side_effect=lambda host, port, timeout: host in frames
+        ) as check:
+            found = pixer_upload.discover(pixer_upload.ipaddress.ip_network("10.0.0.0/29"), 6000)
+
+        self.assertEqual(found, ["10.0.0.3", "10.0.0.6"])
+        self.assertEqual(check.call_count, 6)
+
+    def test_a_long_greeting_still_identifies_a_frame(self):
+        self.answer(b"Hello PC!1.0.8")
+
+        self.assertTrue(pixer_upload.is_pixer("10.0.0.5", 6000))
+
+    def test_a_trickling_reply_cannot_hold_a_probe_past_its_deadline(self):
+        self.answer(*[bytes([c]) for c in b"Hello PC!"])
+        clock = iter(range(0, 100))
+        with unittest.mock.patch.object(pixer_upload.time, "monotonic", side_effect=lambda: next(clock)):
+            self.assertFalse(pixer_upload.is_pixer("10.0.0.5", 6000, timeout=3))
+
+    def test_discover_refuses_a_huge_network_without_listing_it(self):
+        with unittest.mock.patch.object(pixer_upload.ipaddress.IPv4Network, "hosts") as hosts:
+            with self.assertRaisesRegex(pixer_upload.PixerError, "scan at most"):
+                pixer_upload.discover(pixer_upload.ipaddress.ip_network("0.0.0.0/0"), 6000)
+
+        hosts.assert_not_called()
+
+    def test_default_network_is_the_local_slash_24(self):
+        with unittest.mock.patch.object(pixer_upload, "local_source_address", return_value="10.1.7.49"):
+            self.assertEqual(str(pixer_upload.local_network()), "10.1.7.0/24")
+
+    def test_default_network_falls_back_to_the_hotspot_route(self):
+        routes = {"192.0.2.1": None, "192.168.1.1": "192.168.1.20"}
+        with unittest.mock.patch.object(pixer_upload, "local_source_address", side_effect=routes.get):
+            self.assertEqual(str(pixer_upload.local_network()), "192.168.1.0/24")
+
+    def test_cli_without_any_route_fails_before_scanning(self):
+        with unittest.mock.patch.object(pixer_upload, "local_source_address", return_value=None), \
+                unittest.mock.patch.object(pixer_upload, "discover") as scan, \
+                unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(pixer_upload.main(["--discover"]), 1)
+
+        scan.assert_not_called()
+        self.assertIn("no network route", err.getvalue())
+
+    def test_cli_named_network_skips_the_route_lookup(self):
+        with unittest.mock.patch.object(pixer_upload, "local_network") as default, \
+                unittest.mock.patch.object(pixer_upload, "discover", return_value=["10.2.0.9"]), \
+                unittest.mock.patch("sys.stdout", new_callable=io.StringIO):
+            self.assertEqual(pixer_upload.main(["--discover", "10.2.0.0/24"]), 0)
+
+        default.assert_not_called()
+
+    def test_cli_rejects_host_with_discover(self):
+        with unittest.mock.patch.object(pixer_upload, "discover") as scan, \
+                unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(pixer_upload.main(["--discover", "--host", "10.1.7.102"]), 1)
+            self.assertEqual(pixer_upload.main(["--discover", "--host", "192.168.1.1"]), 1)
+
+        scan.assert_not_called()
+        self.assertIn("instead of --host", err.getvalue())
+
+    def test_cli_rejects_an_impossible_port(self):
+        with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            with self.assertRaises(SystemExit):
+                pixer_upload.main(["--probe", "--port", "70000"])
+
+        self.assertIn("between 1 and 65535", err.getvalue())
+
+    def test_cli_reports_found_frames(self):
+        with unittest.mock.patch.object(pixer_upload, "discover", return_value=["10.1.7.102"]) as scan, \
+                unittest.mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.assertEqual(pixer_upload.main(["--discover", "10.1.7.0/24"]), 0)
+
+        scan.assert_called_once_with(pixer_upload.ipaddress.ip_network("10.1.7.0/24"), 6000)
+        self.assertIn("Found Pixer at 10.1.7.102", out.getvalue())
+
+    def test_cli_explains_an_empty_scan(self):
+        with unittest.mock.patch.object(pixer_upload, "discover", return_value=[]), \
+                unittest.mock.patch("sys.stdout", new_callable=io.StringIO), \
+                unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(pixer_upload.main(["--discover", "10.1.7.0/24"]), 1)
+
+        self.assertIn("short press", err.getvalue())
+
+    def test_cli_rejects_a_malformed_network(self):
+        with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(pixer_upload.main(["--discover", "10.1.7"]), 1)
+
+        self.assertIn("not an IPv4 network", err.getvalue())
 
 
 class TransferFailureTests(unittest.TestCase):
