@@ -17,6 +17,12 @@ pixer_upload = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(pixer_upload)
 
+CARD_PATH = Path(__file__).parents[1] / "misc" / "make_test_card.py"
+CARD_SPEC = importlib.util.spec_from_file_location("make_test_card", CARD_PATH)
+make_test_card = importlib.util.module_from_spec(CARD_SPEC)
+assert CARD_SPEC.loader is not None
+CARD_SPEC.loader.exec_module(make_test_card)
+
 
 class PixerEncodingTests(unittest.TestCase):
     def test_java_div_truncates_toward_zero(self):
@@ -53,6 +59,137 @@ class PixerEncodingTests(unittest.TestCase):
             pixer_upload.file_header(1_314_144),
             b"#file#000801314144imagebin",
         )
+
+
+class DitherTests(unittest.TestCase):
+    METHODS = ("floyd-steinberg", "atkinson", "none")
+
+    def test_rounded_gray_keeps_neutral_grays_exact(self):
+        rgb = bytes(value for value in (0, 17, 128, 254, 255) for _ in range(3))
+        self.assertEqual(pixer_upload.rgb_to_gray(rgb, 5, 1), bytes([0, 16, 127, 253, 254]))
+        self.assertEqual(
+            pixer_upload.rgb_to_gray(rgb, 5, 1, rounded=True), bytes([0, 17, 128, 254, 255])
+        )
+
+    def test_exact_levels_pass_through_every_method(self):
+        gray = bytes(17 * level for level in range(16))
+        for method in self.METHODS:
+            with self.subTest(method=method):
+                self.assertEqual(
+                    pixer_upload.diffuse_16_levels(gray, 16, 1, method), bytearray(range(16))
+                )
+
+    def test_white_stays_white(self):
+        gray = bytes([255]) * (64 * 8)
+        for method in self.METHODS:
+            with self.subTest(method=method):
+                self.assertEqual(
+                    set(pixer_upload.diffuse_16_levels(gray, 64, 8, method)), {15}
+                )
+
+    def test_floyd_steinberg_turns_a_half_level_into_a_checkerboard(self):
+        levels = pixer_upload.diffuse_16_levels(bytes([9] * 4), 2, 2, "floyd-steinberg")
+        self.assertEqual(levels, bytearray([1, 0, 0, 1]))
+
+    def test_atkinson_reaches_two_pixels_right_and_two_rows_down(self):
+        gray = bytes([9, 0, 9, 0, 0, 0, 9, 0, 0])
+        levels = pixer_upload.diffuse_16_levels(gray, 3, 3, "atkinson")
+        self.assertEqual(levels, bytearray([1, 0, 0, 0, 0, 0, 0, 0, 0]))
+
+    def test_none_rounds_to_the_nearest_level(self):
+        levels = pixer_upload.diffuse_16_levels(bytes([8, 9, 25, 26]), 4, 1, "none")
+        self.assertEqual(levels, bytearray([0, 1, 1, 2]))
+
+    def test_floyd_steinberg_preserves_average_brightness(self):
+        width, height = 64, 64
+        gray = bytes([100]) * (width * height)
+        levels = pixer_upload.diffuse_16_levels(gray, width, height, "floyd-steinberg")
+        self.assertAlmostEqual(sum(levels) * 17 / len(levels), 100, delta=1)
+        self.assertEqual(set(levels), {5, 6})
+
+    def payload(self, *dither):
+        # Gray 9 truncates to 8 in the app's grayscale, which changes the result.
+        with unittest.mock.patch.multiple(
+            pixer_upload, target_size=unittest.mock.DEFAULT, convert_to_rgb=unittest.mock.DEFAULT
+        ) as mocks:
+            mocks["target_size"].return_value = (4, 2)
+            mocks["convert_to_rgb"].return_value = bytes([9]) * (4 * 2 * 3)
+            payload, _, _ = pixer_upload.build_payload(Path("x"), "auto", "cover", *dither)
+        return payload
+
+    def test_app_dither_is_the_default_and_matches_the_app(self):
+        self.assertEqual(self.payload(), bytes.fromhex("10100101"))
+        self.assertEqual(self.payload("app"), bytes.fromhex("10100101"))
+
+    def test_other_methods_use_the_rounded_grayscale(self):
+        self.assertEqual(self.payload("none"), bytes.fromhex("11111111"))
+        self.assertEqual(self.payload("floyd-steinberg"), bytes.fromhex("01011010"))
+
+    def test_cli_passes_the_dither_method_through(self):
+        with unittest.mock.patch.object(pixer_upload, "build_payload") as build, \
+                unittest.mock.patch("sys.stdout", new_callable=io.StringIO):
+            build.return_value = (b"\x00", 2, 1)
+            status = pixer_upload.main([__file__, "--dry-run", "--dither", "atkinson"])
+        self.assertEqual(status, 0)
+        build.assert_called_once_with(Path(__file__), "auto", "cover", "atkinson")
+
+    def test_cli_rejects_an_unknown_method(self):
+        with unittest.mock.patch("sys.stderr", new_callable=io.StringIO), \
+                self.assertRaises(SystemExit):
+            pixer_upload.main([__file__, "--dry-run", "--dither", "ordered"])
+
+
+class TestCardTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.card = make_test_card.test_card()
+        cls.width = make_test_card.WIDTH
+
+    def pixel(self, column, row):
+        return self.card[row * self.width + column]
+
+    def test_card_fills_the_landscape_panel(self):
+        self.assertEqual((make_test_card.WIDTH, make_test_card.HEIGHT), pixer_upload.LANDSCAPE_SIZE)
+        self.assertEqual(len(self.card), make_test_card.WIDTH * make_test_card.HEIGHT)
+
+    def test_top_band_shows_all_sixteen_levels_in_order(self):
+        top = self.card[: self.width]
+        self.assertEqual(sorted(set(top)), [17 * level for level in range(16)])
+        self.assertEqual(list(top), sorted(top))
+        self.assertEqual(self.pixel(0, 0), 0)
+        self.assertEqual(self.pixel(self.width - 1, 0), 255)
+
+    def test_middle_band_ramps_from_black_to_white(self):
+        row = make_test_card.BAND + 1
+        self.assertEqual(self.pixel(0, row), 0)
+        self.assertEqual(self.pixel(self.width - 1, row), 255)
+        self.assertGreater(len(set(self.card[row * self.width : (row + 1) * self.width])), 250)
+
+    def test_script_writes_a_binary_pgm(self):
+        with unittest.mock.patch.object(Path, "write_bytes") as write:
+            self.assertEqual(make_test_card.main(["card.pgm"]), 0)
+        data = write.call_args.args[0]
+        self.assertTrue(data.startswith(b"P5\n1872 1404\n255\n"))
+        self.assertTrue(data.endswith(self.card))
+
+    def test_help_does_not_write_a_file(self):
+        with unittest.mock.patch.object(Path, "write_bytes") as write, \
+                unittest.mock.patch("sys.stdout", new_callable=io.StringIO), \
+                self.assertRaises(SystemExit):
+            make_test_card.main(["--help"])
+        write.assert_not_called()
+
+    def test_stripes_alternate_at_each_width(self):
+        cell = self.width // 4
+        vertical_row = 2 * make_test_card.BAND
+        horizontal_start = vertical_row + (make_test_card.HEIGHT - vertical_row) // 2
+        for index, width in enumerate((1, 2, 3, 4)):
+            start = index * cell
+            with self.subTest(width=width):
+                across = [self.pixel(start + offset, vertical_row) for offset in range(2 * width)]
+                self.assertEqual(across, [0] * width + [255] * width)
+                down = [self.pixel(start, horizontal_start + offset) for offset in range(2 * width)]
+                self.assertEqual(down, [0] * width + [255] * width)
 
 
 class ImageSizeTests(unittest.TestCase):
