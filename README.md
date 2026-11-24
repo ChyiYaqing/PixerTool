@@ -77,6 +77,24 @@ Upload for real:
 python3 pixer_upload.py photo.jpg
 ```
 
+### Read battery and firmware status
+
+```bash
+python3 pixer_upload.py --status
+```
+
+This reports the battery level and the BLE, display, and MCU firmware
+versions. It works on the frame's hotspot and, with `--host FRAME_IP`, on a
+network the frame has joined. The query is read-only.
+
+```text
+Pixer at 10.1.7.102:6000
+  Battery: 100%
+  BLE firmware: GBT_BLE_v.A.14
+  Display firmware: GBT_v.A.35
+  MCU firmware: GBT_170206-1_7.8A
+```
+
 ### Join an existing Wi-Fi network
 
 Connect to the hotspot broadcast by your own frame, then run this one-time
@@ -116,6 +134,7 @@ uploads. LAN upload and wake behavior depend on the frame firmware.
 | `--output-bin PATH` | — | Write the packed payload to a file. |
 | `--dry-run` | off | Convert only; never open a socket. |
 | `--probe` | off | Test TCP reachability and exit. |
+| `--status` | off | Read the battery level and firmware versions, then exit. |
 | `--setup-wifi SSID` | off | Send Wi-Fi settings to the frame over its hotspot. |
 
 Before converting anything, an upload checks that the frame is actually

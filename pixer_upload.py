@@ -28,6 +28,9 @@ WIFI_HINT = 'Join the frame\'s own Wi-Fi network (for example "Pixer 0939"), the
 LANDSCAPE_SIZE = (1872, 1404)
 PORTRAIT_SIZE = (1404, 1872)
 ACK_SIZE = 6
+STATUS_REPLY_SIZE = 64
+STATUS_GREETING = "Hello PC!"
+STATUS_QUIET_GAP = 0.3
 
 
 class PixerError(RuntimeError):
@@ -335,6 +338,92 @@ def probe_device(host: str, port: int, timeout: float = PROBE_TIMEOUT) -> None:
     connect_to_pixer(host, port, timeout).close()
 
 
+def printable(reply: bytes) -> str:
+    """Decode a device reply with control and non-ASCII bytes escaped."""
+    text = reply.strip(b"\x00\r\n ").decode("latin-1")
+    return text.encode("unicode_escape").decode("ascii")
+
+
+def read_reply(sock: socket.socket, wait: float) -> bytes:
+    """Read one status reply. TCP has no message boundaries, so after the first
+    bytes arrive, keep collecting until the frame goes quiet."""
+    reply = bytearray()
+    sock.settimeout(wait)
+    try:
+        while len(reply) < STATUS_REPLY_SIZE:
+            chunk = sock.recv(STATUS_REPLY_SIZE - len(reply))
+            if not chunk:
+                break
+            reply.extend(chunk)
+            sock.settimeout(STATUS_QUIET_GAP)
+    except socket.timeout:
+        if not reply:
+            raise
+    finally:
+        sock.settimeout(wait)
+    return bytes(reply)
+
+
+def discard_reply(sock: socket.socket, window: float) -> None:
+    """Read and drop whatever arrives within window seconds."""
+    deadline = time.monotonic() + window
+    try:
+        while (remaining := deadline - time.monotonic()) > 0:
+            sock.settimeout(remaining)
+            if not sock.recv(STATUS_REPLY_SIZE):
+                return
+    except socket.timeout:
+        pass
+
+
+def query(sock: socket.socket, command: bytes, timeout: float) -> str:
+    name = command.decode("ascii")
+    try:
+        sock.sendall(command)
+        reply = read_reply(sock, timeout)
+    except socket.timeout as exc:
+        raise PixerError(f"Pixer did not answer {name} within {timeout:.0f} seconds") from exc
+    except OSError as exc:
+        raise PixerError(f"the connection to Pixer failed during {name}: {exc}") from exc
+    if not reply:
+        raise PixerError(f"Pixer closed the connection after {name}")
+    return printable(reply)
+
+
+def battery_percent(text: str) -> str:
+    if not text.isdigit() or int(text) > 100:
+        raise PixerError(f"Pixer returned an unreadable battery level: {text!r}")
+    return f"{int(text)}%"
+
+
+def read_status(host: str, port: int, timeout: float = PROBE_TIMEOUT) -> dict[str, str]:
+    """Query firmware versions and battery, as MainActivityV2.checkPixer does."""
+    with connect_to_pixer(host, port, timeout) as sock:
+        greeting = query(sock, b"#TEST#", timeout)
+        if greeting == STATUS_GREETING:
+            ble = query(sock, b"bleVersion", timeout)
+        elif greeting.startswith(STATUS_GREETING):
+            # The app reads the BLE version from a longer greeting, then still
+            # sends bleVersion without reading. Discard any reply so it cannot
+            # be mistaken for the next answer.
+            ble = greeting[len(STATUS_GREETING):]
+            try:
+                sock.sendall(b"bleVersion")
+                discard_reply(sock, STATUS_QUIET_GAP)
+                sock.settimeout(timeout)
+            except OSError as exc:
+                raise PixerError(f"the connection to Pixer failed during bleVersion: {exc}") from exc
+        else:
+            raise PixerError(f"unexpected reply to #TEST#: {greeting!r}")
+        status = {
+            "BLE firmware": ble,
+            "Display firmware": query(sock, b"iteVersion", timeout),
+            "MCU firmware": query(sock, b"mcuVersion", timeout),
+        }
+        battery = query(sock, b"batteryLevel", timeout)
+    return {"Battery": battery_percent(battery), **status}
+
+
 def wifi_field(value: str, name: str) -> bytes:
     encoded = value.encode("utf-8")
     if not 1 <= len(encoded) <= 32 or b"\x00" in encoded:
@@ -463,6 +552,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="convert only; do not contact Pixer")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--probe", action="store_true", help="only test the TCP upload port")
+    mode.add_argument("--status", action="store_true", help="read battery level and firmware versions")
     mode.add_argument("--setup-wifi", metavar="SSID", help="join a WPA2 network from the frame's hotspot")
     return parser
 
@@ -482,6 +572,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.probe:
             probe_device(args.host, args.port)
             print(f"Pixer upload service is reachable at {args.host}:{args.port}")
+            return 0
+        if args.status:
+            if args.image is not None or args.dry_run or args.output_bin is not None:
+                raise PixerError("--status cannot be combined with image conversion")
+            status = read_status(args.host, args.port)
+            print(f"Pixer at {args.host}:{args.port}")
+            for label, value in status.items():
+                print(f"  {label}: {value}")
             return 0
         if args.image is None:
             raise PixerError("an image path is required unless --probe is used")
