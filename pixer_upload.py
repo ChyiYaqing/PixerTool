@@ -35,6 +35,9 @@ STATUS_QUIET_GAP = 0.3
 DISCOVER_TIMEOUT = 1.0
 DISCOVER_WORKERS = 64
 DISCOVER_MAX_HOSTS = 1024
+# Refuses decompression bombs while allowing 48-megapixel phone photos.
+MAX_PIXELS = 100_000_000
+FFMPEG_TIMEOUT = 60.0
 
 
 class PixerError(RuntimeError):
@@ -47,6 +50,16 @@ def java_div(value: int, divisor: int) -> int:
     return -quotient if (value < 0) != (divisor < 0) else quotient
 
 
+def run_tool(command: list[str], text: bool = False) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(
+            command, capture_output=True, text=text, check=False, timeout=FFMPEG_TIMEOUT
+        )
+    except subprocess.TimeoutExpired as exc:
+        name = Path(command[0]).name
+        raise PixerError(f"{name} took longer than {FFMPEG_TIMEOUT:.0f} seconds") from exc
+
+
 def probe_image_size(image_path: Path) -> tuple[int, int]:
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
@@ -55,23 +68,33 @@ def probe_image_size(image_path: Path) -> tuple[int, int]:
         ffprobe,
         "-v",
         "error",
+        "-max_pixels",
+        str(MAX_PIXELS),
         "-select_streams",
         "v:0",
+        "-read_intervals",
+        "%+#1",
         "-show_entries",
-        "stream=width,height",
+        "frame=width,height:frame_side_data=rotation",
         "-of",
-        "csv=s=x:p=0",
+        "default=noprint_wrappers=1",
         str(image_path),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    result = run_tool(command, text=True)
+    fields = dict(
+        line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
+    )
     try:
-        width_text, height_text = result.stdout.strip().split("x", 1)
-        width, height = int(width_text), int(height_text)
-    except (TypeError, ValueError) as exc:
+        width, height = int(fields["width"]), int(fields["height"])
+        rotation = int(float(fields.get("rotation", "0")))
+    except (KeyError, ValueError) as exc:
         detail = result.stderr.strip() or "unsupported or unreadable image"
         raise PixerError(f"could not read image dimensions: {detail}") from exc
     if width <= 0 or height <= 0:
         raise PixerError("image dimensions must be positive")
+    # ffmpeg applies EXIF orientation when converting, so report the shown size.
+    if abs(rotation) % 180 == 90:
+        width, height = height, width
     return width, height
 
 
@@ -104,6 +127,8 @@ def convert_to_rgb(
         ffmpeg,
         "-v",
         "error",
+        "-max_pixels",
+        str(MAX_PIXELS),
         "-i",
         str(image_path),
         "-vf",
@@ -116,7 +141,7 @@ def convert_to_rgb(
         "rgb24",
         "pipe:1",
     ]
-    result = subprocess.run(command, capture_output=True, check=False)
+    result = run_tool(command)
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", errors="replace").strip()
         raise PixerError(f"ffmpeg conversion failed: {detail}")
@@ -599,7 +624,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Upload an image directly to a G+ Pixer frame"
     )
-    parser.add_argument("image", nargs="?", type=Path, help="JPEG, PNG, HEIC, or other ffmpeg-readable image")
+    parser.add_argument("image", nargs="?", type=Path, help="JPEG, PNG, or other ffmpeg-readable image")
     parser.add_argument("--host", help=f"frame address (default: {DEFAULT_HOST})")
     parser.add_argument("--port", type=tcp_port, default=DEFAULT_PORT)
     parser.add_argument(
