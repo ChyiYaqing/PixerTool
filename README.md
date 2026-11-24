@@ -142,6 +142,34 @@ Pixer at 10.1.7.102:6000
   MCU firmware: GBT_170206-1_7.8A
 ```
 
+### Send photos from a phone
+
+`pixer_web.py` serves a small page that anyone on the same network can open on
+a phone to send a photo to the frame. It needs no app; the computer running it
+does the conversion and the upload.
+
+```bash
+python3 pixer_web.py
+```
+
+```text
+Scanning 10.1.7.0/24 for a Pixer frame...
+Sending photos to the Pixer frame at 10.1.7.102:6000
+On a phone on the same network, open http://10.1.7.49:8000
+Press Ctrl-C to stop.
+```
+
+Without `--host` it finds the frame with the same scan as `--discover`, and
+stops if it finds none or more than one. `--web-port` changes the page's port
+(default 8000). The page accepts JPEG and PNG photos up to 50 MB, picks
+portrait or landscape from the photo (honoring the phone's rotation flag),
+offers the `cover` and `contain` fits, and sends one photo at a time.
+
+Anyone who can open the page can change the picture, the same as anyone who
+can reach the frame's port 6000. Run it only on a network you trust. macOS may
+ask whether Python can accept incoming connections; allow it, or phones cannot
+reach the page.
+
 ### Join an existing Wi-Fi network
 
 Connect to the hotspot broadcast by your own frame, then run this one-time

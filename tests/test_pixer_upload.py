@@ -1,6 +1,10 @@
 import importlib.util
 import io
+import shutil
 import socket
+import struct
+import subprocess
+import tempfile
 import threading
 import unittest
 import unittest.mock
@@ -186,6 +190,63 @@ class TestCardTests(unittest.TestCase):
                 self.assertEqual(across, [0] * width + [255] * width)
                 down = [self.pixel(start, horizontal_start + offset) for offset in range(2 * width)]
                 self.assertEqual(down, [0] * width + [255] * width)
+
+
+class ImageSizeTests(unittest.TestCase):
+    def probe(self, stdout):
+        result = unittest.mock.Mock(stdout=stdout, stderr="")
+        with unittest.mock.patch.object(pixer_upload.shutil, "which", return_value="ffprobe"), \
+                unittest.mock.patch.object(pixer_upload.subprocess, "run", return_value=result):
+            return pixer_upload.probe_image_size(Path("photo.jpg"))
+
+    def test_plain_image_keeps_its_size(self):
+        self.assertEqual(self.probe("width=400\nheight=200\n"), (400, 200))
+
+    def test_exif_rotated_photo_reports_the_shown_size(self):
+        for rotation in ("-90", "90", "270"):
+            with self.subTest(rotation=rotation):
+                stdout = f"width=4032\nheight=3024\nrotation={rotation}\n"
+                self.assertEqual(self.probe(stdout), (3024, 4032))
+
+    def test_tilted_display_matrix_keeps_its_size(self):
+        self.assertEqual(self.probe("width=400\nheight=200\nrotation=45\n"), (400, 200))
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "needs ffmpeg")
+    def test_real_jpeg_with_exif_orientation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            plain = Path(folder) / "plain.jpg"
+            subprocess.run(
+                ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=white:s=400x200",
+                 "-frames:v", "1", str(plain)],
+                check=True,
+            )
+            # Big-endian EXIF with one IFD0 entry: Orientation (0x0112) = 6.
+            tiff = b"MM\x00\x2a" + struct.pack(">IHHHIHHI", 8, 1, 0x0112, 3, 1, 6, 0, 0)
+            app1 = b"Exif\x00\x00" + tiff
+            data = plain.read_bytes()
+            rotated = Path(folder) / "rotated.jpg"
+            rotated.write_bytes(data[:2] + b"\xff\xe1" + struct.pack(">H", len(app1) + 2) + app1 + data[2:])
+            self.assertEqual(pixer_upload.probe_image_size(plain), (400, 200))
+            self.assertEqual(pixer_upload.probe_image_size(rotated), (200, 400))
+
+    def test_upside_down_photo_keeps_its_size(self):
+        self.assertEqual(self.probe("width=400\nheight=200\nrotation=180\n"), (400, 200))
+
+    def test_portrait_phone_photo_chooses_portrait(self):
+        with unittest.mock.patch.object(pixer_upload, "probe_image_size", return_value=(3024, 4032)):
+            self.assertEqual(pixer_upload.target_size(Path("x"), "auto"), pixer_upload.PORTRAIT_SIZE)
+
+    def test_stuck_ffmpeg_is_stopped(self):
+        timeout = pixer_upload.subprocess.TimeoutExpired(["/opt/bin/ffprobe"], 60)
+        with unittest.mock.patch.object(pixer_upload.shutil, "which", return_value="/opt/bin/ffprobe"), \
+                unittest.mock.patch.object(pixer_upload.subprocess, "run", side_effect=timeout) as run:
+            with self.assertRaisesRegex(pixer_upload.PixerError, "ffprobe took longer than 60 seconds"):
+                pixer_upload.probe_image_size(Path("photo.jpg"))
+        self.assertEqual(run.call_args.kwargs["timeout"], pixer_upload.FFMPEG_TIMEOUT)
+
+    def test_unreadable_image_is_reported(self):
+        with self.assertRaisesRegex(pixer_upload.PixerError, "could not read image dimensions"):
+            self.probe("")
 
 
 class TerminalStream(io.StringIO):
