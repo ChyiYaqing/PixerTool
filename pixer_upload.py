@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import getpass
 import ipaddress
+import os
 import secrets
 import shutil
 import socket
@@ -14,7 +16,9 @@ import sys
 import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
+from typing import Iterator
 
 
 DEFAULT_HOST = "192.168.1.1"
@@ -45,10 +49,48 @@ DITHER_METHODS = ("app", *DIFFUSION_KERNELS)
 # Refuses decompression bombs while allowing 48-megapixel phone photos.
 MAX_PIXELS = 100_000_000
 FFMPEG_TIMEOUT = 60.0
+# Not tempfile.gettempdir(): TMPDIR differs between a macOS shell and cron, and
+# every process that talks to the frame must find the same lock.
+LOCK_DIR = Path("/tmp")
+# Long enough for another upload to finish: a few seconds of sending, then the redraw.
+LOCK_WAIT = 300.0
+LOCK_POLL = 0.5
 
 
 class PixerError(RuntimeError):
     """Raised for image conversion or device communication failures."""
+
+
+class FrameBusy(PixerError):
+    """Raised when another PixerTool process on this computer holds the frame."""
+
+
+@contextmanager
+def frame_lock(host: str, port: int, wait: float) -> Iterator[None]:
+    """Hold the frame, so a scheduled upload and a phone upload never overlap.
+
+    The lock is a file shared by every PixerTool process on this computer.
+    Waits up to `wait` seconds for another holder to finish.
+    """
+    path = LOCK_DIR / f"pixer-{host}-{port}.lock"
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise FrameBusy(
+                        f"another PixerTool upload to {host}:{port} is still running; "
+                        "try again in a few minutes"
+                    ) from None
+                time.sleep(min(LOCK_POLL, remaining))
+        yield
+    finally:
+        os.close(descriptor)
 
 
 def java_div(value: int, divisor: int) -> int:
@@ -494,6 +536,11 @@ def read_status(host: str, port: int, timeout: float = PROBE_TIMEOUT) -> dict[st
     return {"Battery": battery_percent(battery), **status}
 
 
+def read_battery(host: str, port: int) -> int:
+    """Read the frame's battery level as a percentage."""
+    return int(read_status(host, port)["Battery"].removesuffix("%"))
+
+
 def is_pixer(host: str, port: int, timeout: float = DISCOVER_TIMEOUT) -> bool:
     """Tell a Pixer from any other service on the port by its #TEST# greeting."""
     expected = STATUS_GREETING.encode("ascii")
@@ -764,28 +811,29 @@ def main(argv: list[str] | None = None) -> int:
             raise PixerError("an image path is required unless --probe is used")
         if not args.image.is_file():
             raise PixerError(f"image does not exist: {args.image}")
-        if args.min_battery is not None:
-            battery = int(read_status(args.host, args.port)["Battery"].removesuffix("%"))
-            if battery < args.min_battery:
-                raise PixerError(
-                    f"the frame's battery is {battery}%, below --min-battery "
-                    f"{args.min_battery}%; upload skipped. Charge the frame."
-                )
-            print(f"Battery {battery}%", flush=True)
-        elif not args.dry_run:
-            probe_device(args.host, args.port)
+        with nullcontext() if args.dry_run else frame_lock(args.host, args.port, LOCK_WAIT):
+            if args.min_battery is not None:
+                battery = read_battery(args.host, args.port)
+                if battery < args.min_battery:
+                    raise PixerError(
+                        f"the frame's battery is {battery}%, below --min-battery "
+                        f"{args.min_battery}%; upload skipped. Charge the frame."
+                    )
+                print(f"Battery {battery}%", flush=True)
+            elif not args.dry_run:
+                probe_device(args.host, args.port)
 
-        payload, width, height = build_payload(
-            args.image, args.orientation, args.fit, args.dither
-        )
-        print(f"Prepared {width}x{height}, {len(payload)} bytes", flush=True)
-        if args.output_bin:
-            args.output_bin.write_bytes(payload)
-            print(f"Saved imagebin: {args.output_bin}", flush=True)
-        if args.dry_run:
-            return 0
+            payload, width, height = build_payload(
+                args.image, args.orientation, args.fit, args.dither
+            )
+            print(f"Prepared {width}x{height}, {len(payload)} bytes", flush=True)
+            if args.output_bin:
+                args.output_bin.write_bytes(payload)
+                print(f"Saved imagebin: {args.output_bin}", flush=True)
+            if args.dry_run:
+                return 0
 
-        acknowledgement = upload_payload(payload, args.host, args.port)
+            acknowledgement = upload_payload(payload, args.host, args.port)
         print(
             "Pixer acknowledged the upload: "
             + acknowledgement.decode("ascii", errors="backslashreplace")

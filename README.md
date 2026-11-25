@@ -164,6 +164,13 @@ stops if it finds none or more than one. `--web-port` changes the page's port
 (default 8000). The page accepts JPEG and PNG photos up to 50 MB, picks
 portrait or landscape from the photo (honoring the phone's rotation flag),
 offers the `cover` and `contain` fits, and sends one photo at a time.
+`--min-battery PERCENT` reads the frame's battery before each photo and
+refuses the photo below PERCENT, as the uploader's option does.
+
+Uploads from the page and from `pixer_upload.py` on the same computer never
+overlap when the same user runs them with the same `--host` and `--port`: they
+share a lock file in `/tmp`. While one holds the frame, the page asks the phone
+to try again, and `pixer_upload.py` waits up to five minutes before giving up.
 
 Anyone who can open the page can change the picture, the same as anyone who
 can reach the frame's port 6000. Run it only on a network you trust. macOS may

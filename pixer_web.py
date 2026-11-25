@@ -163,7 +163,17 @@ class UploadHandler(BaseHTTPRequestHandler):
             self.reply(HTTPStatus.CONFLICT, "Another photo is being sent. Try again in a moment.")
             return
         try:
-            status, message = self.receive(length, fit)
+            # Hold the frame against other processes too, such as a scheduled
+            # upload, before reading the photo: a busy frame is refused at once.
+            with pixer.frame_lock(self.server.frame_host, self.server.frame_port, wait=0):
+                status, message = self.receive(length, fit)
+        except pixer.FrameBusy:
+            self.close_connection = True
+            status, message = HTTPStatus.CONFLICT, "The frame is busy with another upload. Try again in a minute."
+        except OSError as exc:
+            # The lock file itself could not be opened, for example another user's.
+            self.close_connection = True
+            status, message = HTTPStatus.INTERNAL_SERVER_ERROR, f"Could not reserve the frame: {exc}"
         finally:
             # Free the frame before replying: a client may send its next photo as
             # soon as it reads the reply.
@@ -208,10 +218,17 @@ class UploadHandler(BaseHTTPRequestHandler):
             except (pixer.PixerError, ValueError, OSError) as exc:
                 detail = str(exc).replace(str(path), "the photo")
                 return HTTPStatus.BAD_REQUEST, f"This photo could not be converted: {detail}"
+        host, port, minimum = self.server.frame_host, self.server.frame_port, self.server.min_battery
         try:
-            pixer.upload_payload(
-                payload, self.server.frame_host, self.server.frame_port, progress_stream=io.StringIO()
-            )
+            if minimum is not None:
+                battery = pixer.read_battery(host, port)
+                if battery < minimum:
+                    return (
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        f"The frame's battery is {battery}%, below {minimum}%. "
+                        "Charge the frame, then send the photo again.",
+                    )
+            pixer.upload_payload(payload, host, port, progress_stream=io.StringIO())
         except (pixer.PixerError, OSError) as exc:
             return HTTPStatus.BAD_GATEWAY, f"The frame did not take the photo: {exc}"
         return HTTPStatus.OK, "The frame received the photo and is redrawing."
@@ -229,10 +246,13 @@ class UploadHandler(BaseHTTPRequestHandler):
 class PixerWebServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address: tuple[str, int], frame_host: str, frame_port: int) -> None:
+    def __init__(
+        self, address: tuple[str, int], frame_host: str, frame_port: int, min_battery: int | None = None
+    ) -> None:
         super().__init__(address, UploadHandler)
         self.frame_host = frame_host
         self.frame_port = frame_port
+        self.min_battery = min_battery
         self.frame_lock = threading.Lock()
 
 
@@ -260,6 +280,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_WEB_PORT,
         help=f"port for the web page (default: {DEFAULT_WEB_PORT})",
     )
+    parser.add_argument(
+        "--min-battery",
+        type=pixer.battery_threshold,
+        metavar="PERCENT",
+        help="refuse photos when the frame's battery is below PERCENT",
+    )
     return parser
 
 
@@ -267,7 +293,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         host = args.host or find_frame(args.port)
-        server = PixerWebServer(("0.0.0.0", args.web_port), host, args.port)
+        server = PixerWebServer(("0.0.0.0", args.web_port), host, args.port, args.min_battery)
     except (pixer.PixerError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
