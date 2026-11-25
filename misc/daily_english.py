@@ -28,7 +28,8 @@ DEFAULT_STATE = Path.home() / ".pixer_english_state.json"
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PNG_END = b"\x00\x00\x00\x00IEND\xaeB`\x82"
-SENTENCE_END = re.compile(r'(?<!\bMr)(?<!\bMrs)(?<!\bMs)(?<!\bDr)[.!?]["”]?$')
+# A trailing "..." means the line trails off, so it is not a complete sentence.
+SENTENCE_END = re.compile(r'(?<!\bMr)(?<!\bMrs)(?<!\bMs)(?<!\bDr)(?<!\.)[.!?]["”]?$')
 # A sentence ends at . ! or ?, perhaps inside a closing quote, when the next word
 # starts a new sentence; a lowercase word means the sentence carries on.
 SENTENCE_BREAK = re.compile(

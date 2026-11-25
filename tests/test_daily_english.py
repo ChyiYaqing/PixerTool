@@ -147,6 +147,8 @@ class CandidateTests(unittest.TestCase):
             "I was a little intimidated and devastated by him.",
             "I was a little scared by him today.",
             "I was a little intimidated by him",
+            "I was a little intimidated by his...",
+            "I was a little intimidated by his…",
         ]
         self.assertEqual(
             daily_english.candidates(sentences),
