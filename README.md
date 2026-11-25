@@ -170,6 +170,36 @@ can reach the frame's port 6000. Run it only on a network you trust. macOS may
 ask whether Python can accept incoming connections; allow it, or phones cannot
 reach the page.
 
+### Show a daily English card
+
+`misc/daily_english.py` turns lines from a show's subtitles into a card: the
+line in large type, one word or phrase explained in Chinese, and the source. It
+renders the card with headless Google Chrome and leaves the upload to
+`pixer_upload.py`.
+
+```bash
+python3 misc/daily_english.py card misc/english/example.json -o /tmp/english.png &&
+  python3 pixer_upload.py /tmp/english.png --host 10.1.7.102 --min-battery 20
+```
+
+A pool is a JSON file with a `source` and a list of cards, each with a `quote`,
+a `term` and its Chinese meaning `cn`; see `misc/english/example.json`. Run one
+copy at a time: then every run on the same day renders the same card, so a
+failed upload can simply be retried, and every card shows once before any
+repeats. `~/.pixer_english_state.json`
+remembers what has shown; `--state` moves it.
+
+To build a pool, list candidate lines from a subtitle file, then pick the ones
+worth learning and write their glosses by hand:
+
+```bash
+python3 misc/daily_english.py extract episode.srt
+```
+
+Each line prints as the word that caught it, a tab, and the sentence. Pools
+quote films and shows, so keep them local: Git ignores every
+`misc/english/*.json` except the example.
+
 ### Join an existing Wi-Fi network
 
 Connect to the hotspot broadcast by your own frame, then run this one-time
