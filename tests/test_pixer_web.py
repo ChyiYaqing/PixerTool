@@ -139,10 +139,10 @@ class WebUploadTests(unittest.TestCase):
             reply(handler, status, message)
 
         with unittest.mock.patch.object(pixer_web.UploadHandler, "reply", recording_reply):
-            self.post()
-            self.post(b"not a photo")
+            statuses = [self.post()[0], self.post(b"not a photo")[0]]
             self.mocks["upload_payload"].side_effect = pixer.PixerError("cannot reach Pixer")
-            self.post()
+            statuses.append(self.post()[0])
+        self.assertEqual(statuses, [200, 400, 502])
         self.assertEqual(locked, [False, False, False])
 
     def test_stalled_upload_times_out_and_frees_the_frame(self):
@@ -159,27 +159,30 @@ class WebUploadTests(unittest.TestCase):
         connection = self.raw_connection()
         stop = threading.Event()
 
-        def trickle():
+        def trickle(sock):
             while not stop.wait(0.05):
                 try:
-                    connection.sock.sendall(b"\xff")
+                    sock.sendall(b"\xff")
                 except OSError:
                     return
 
-        sender = threading.Thread(target=trickle, daemon=True)
         # Shorten the deadline before the headers go out: the server reads it
         # as soon as they arrive.
         with unittest.mock.patch.object(pixer_web, "UPLOAD_DEADLINE", 0.4):
             connection.putrequest("POST", "/upload")
             connection.putheader("Content-Length", "1000")
             connection.endheaders()
+            # Keep our own reference: reading the response sets connection.sock to None.
+            sender = threading.Thread(target=trickle, args=(connection.sock,), daemon=True)
             sender.start()
             started = time.monotonic()
-            response = connection.getresponse()
-            stop.set()
+            try:
+                response = connection.getresponse()
+            finally:
+                stop.set()
+                sender.join()
         self.assertEqual(response.status, 408)
         self.assertLess(time.monotonic() - started, 2)
-        sender.join()
         self.assertEqual(self.post()[0], 200)
 
     def test_malformed_host_is_refused(self):
