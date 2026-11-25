@@ -47,7 +47,7 @@ PAGE = Template("""<!doctype html>
   .top { display: flex; justify-content: space-between; align-items: baseline;
          font-size: 40px; letter-spacing: 2px; color: #555; text-transform: uppercase; }
   .top .rule { flex: 1; border-bottom: 3px solid #222; margin: 0 40px 14px; }
-  .mid { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+  .mid { flex: 1; text-align: center; display: flex; flex-direction: column; justify-content: center; }
   .quote { font-family: Georgia, "Times New Roman", serif; font-size: ${size}px;
            line-height: 1.28; font-weight: 500; text-wrap: balance; }
   .quote .q { color: #888; }
