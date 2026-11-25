@@ -129,6 +129,22 @@ class WebUploadTests(unittest.TestCase):
         self.mocks["build_payload"].assert_not_called()
         self.assertEqual(self.post()[0], 200)
 
+    def test_frame_is_free_before_the_reply_is_sent(self):
+        # A client may send the next photo as soon as it reads the reply.
+        locked = []
+        reply = pixer_web.UploadHandler.reply
+
+        def recording_reply(handler, status, message):
+            locked.append(handler.server.frame_lock.locked())
+            reply(handler, status, message)
+
+        with unittest.mock.patch.object(pixer_web.UploadHandler, "reply", recording_reply):
+            self.post()
+            self.post(b"not a photo")
+            self.mocks["upload_payload"].side_effect = pixer.PixerError("cannot reach Pixer")
+            self.post()
+        self.assertEqual(locked, [False, False, False])
+
     def test_stalled_upload_times_out_and_frees_the_frame(self):
         with unittest.mock.patch.object(pixer_web.UploadHandler, "timeout", 0.2):
             connection = self.raw_connection()
@@ -141,9 +157,6 @@ class WebUploadTests(unittest.TestCase):
 
     def test_trickling_upload_hits_the_overall_deadline(self):
         connection = self.raw_connection()
-        connection.putrequest("POST", "/upload")
-        connection.putheader("Content-Length", "1000")
-        connection.endheaders()
         stop = threading.Event()
 
         def trickle():
@@ -154,7 +167,12 @@ class WebUploadTests(unittest.TestCase):
                     return
 
         sender = threading.Thread(target=trickle, daemon=True)
+        # Shorten the deadline before the headers go out: the server reads it
+        # as soon as they arrive.
         with unittest.mock.patch.object(pixer_web, "UPLOAD_DEADLINE", 0.4):
+            connection.putrequest("POST", "/upload")
+            connection.putheader("Content-Length", "1000")
+            connection.endheaders()
             sender.start()
             started = time.monotonic()
             response = connection.getresponse()
