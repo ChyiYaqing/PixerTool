@@ -120,3 +120,41 @@ returns `#SMAC#` followed by a 25-byte device identifier in the form
 then checked connection status through its cloud service. PixerTool uses the
 router's client list to confirm association separately. The setup request
 travels in plaintext over the hotspot.
+
+## Display refresh: whole-panel only
+
+The panel is driven by an ITE IT8951 controller: `res/raw/ite.bin` in the app
+carries the header `ITEEPD8951_A0100` and the string `GBT_v.A.35`, which equals
+the frame's reported `iteVersion`. The IT8951 itself supports partial-area
+updates and fast waveforms — `ite.bin` contains `Display(x,y,w,h)`,
+`ChangeWaveformMode`, `a2 mode`, `5-bits wbf`, `IT8951FillRectTest` and
+`IT8951WbfTest` — but those belong to the controller's built-in test console.
+
+The main MCU firmware (`res/raw/pixer.bin`) does not expose any of that over
+the network. Its image path reads the byte after `#MOVE#` only to log it
+(`#MOVE#: %c`), then runs one fixed `Display, ITE_UPDATE` followed by
+`WiFi, ITE_DONE`. `pixer.bin` holds no display area, partial, fast or refresh
+strings; the only `region` hits are unrelated ARM MPU memory-fault messages
+(`A_invalidRegionId`, `A_unalignedBaseAddr`). The Android app sends `#MOVE#d`
+from a single call site (`ShareActivity`, always `d`), so `d` is not a mode
+selector, and the app has no text-push or region command of its own.
+
+Conclusion: with the shipped firmware, every upload triggers a full-panel
+refresh (about 5–10 seconds, with flashing). Partial or fast refresh is not
+reachable through the network protocol. The waveform images in the app
+(`waveform_new.bin`, `ite_new.bin`) only tune the physical drive curves; they
+do not change the MCU's full-refresh call path, and rewriting them risks
+physically damaging the panel. The only path to partial refresh would be custom
+MCU firmware, which PixerTool does not attempt: it never sends firmware or
+unpair commands (`#TOFF#`, `#CLBT#`, and the `ite_new.bin` / `pixer.bin` /
+`waveform_new.bin` upload paths).
+
+Two questions remain open and would need a disassembler (Ghidra/IDA) on
+`pixer.bin` rather than string searches to answer: whether the `#MOVE#` handler
+has an unused `switch` over its byte (for example `#MOVE#f`/`p`/`a`), and
+whether the MCU ever issues the IT8951 `DPY_AREA` command (`0x0037`). Neither is
+exercised by the app, and using either would still likely require new firmware.
+
+Design consequence: treat the frame as slow media. Refresh once or a few times a
+day, and keep a fixed template so that most of the panel is unchanged between
+images, which softens the visible flash.
