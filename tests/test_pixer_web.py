@@ -2,6 +2,7 @@ import http.client
 import io
 import json
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -13,6 +14,15 @@ import pixer_web  # noqa: E402
 
 pixer = pixer_web.pixer
 JPEG = b"\xff\xd8\xff\xe0 jpeg bytes"
+
+
+def setUpModule():
+    # Keep the tests' frame locks away from real uploads on this computer. Set the
+    # attribute directly: some tests end with patch.stopall, which would undo a patch.
+    folder = tempfile.TemporaryDirectory()
+    unittest.addModuleCleanup(folder.cleanup)
+    unittest.addModuleCleanup(setattr, pixer, "LOCK_DIR", pixer.LOCK_DIR)
+    pixer.LOCK_DIR = Path(folder.name)
 
 
 class WebUploadTests(unittest.TestCase):
@@ -128,6 +138,51 @@ class WebUploadTests(unittest.TestCase):
             self.assertIn("Another photo is being sent", json.loads(response.read())["message"])
         self.mocks["build_payload"].assert_not_called()
         self.assertEqual(self.post()[0], 200)
+
+    def test_frame_held_by_another_process_is_refused_before_the_body_arrives(self):
+        self.server.min_battery = 20
+        connection = self.raw_connection()
+        with unittest.mock.patch.object(pixer, "read_battery", return_value=80) as battery:
+            with pixer.frame_lock("10.0.0.5", 6000, wait=0):
+                connection.putrequest("POST", "/upload")
+                connection.putheader("Content-Length", str(10 * 1024 * 1024))
+                connection.endheaders()
+                response = connection.getresponse()
+                self.assertEqual(response.status, 409)
+                self.assertIn("busy with another upload", json.loads(response.read())["message"])
+            self.mocks["build_payload"].assert_not_called()
+            battery.assert_not_called()
+            self.mocks["upload_payload"].assert_not_called()
+            self.assertEqual(self.post()[0], 200)
+
+    def test_an_unopenable_lock_file_is_explained(self):
+        refused = PermissionError(13, "Permission denied", "/tmp/pixer-10.0.0.5-6000.lock")
+        with unittest.mock.patch.object(pixer, "frame_lock", side_effect=refused):
+            status, result = self.post()
+        self.assertEqual((status, result["ok"]), (500, False))
+        self.assertIn("Could not reserve the frame: [Errno 13] Permission denied", result["message"])
+        self.mocks["build_payload"].assert_not_called()
+        self.assertEqual(self.post()[0], 200)
+
+    def test_low_battery_is_refused_without_uploading(self):
+        self.server.min_battery = 20
+        with unittest.mock.patch.object(pixer, "read_battery", return_value=19) as battery:
+            status, result = self.post()
+        battery.assert_called_once_with("10.0.0.5", 6000)
+        self.assertEqual((status, result["ok"]), (503, False))
+        self.assertIn("battery is 19%, below 20%", result["message"])
+        self.mocks["upload_payload"].assert_not_called()
+
+    def test_battery_at_the_threshold_uploads(self):
+        self.server.min_battery = 20
+        with unittest.mock.patch.object(pixer, "read_battery", return_value=20):
+            self.assertEqual(self.post()[0], 200)
+        self.mocks["upload_payload"].assert_called_once()
+
+    def test_battery_is_not_read_without_a_threshold(self):
+        with unittest.mock.patch.object(pixer, "read_battery") as battery:
+            self.assertEqual(self.post()[0], 200)
+        battery.assert_not_called()
 
     def test_frame_is_free_before_the_reply_is_sent(self):
         # A client may send the next photo as soon as it reads the reply.
@@ -263,8 +318,15 @@ class StartupTests(unittest.TestCase):
             server.return_value.serve_forever.side_effect = KeyboardInterrupt
             status, out, _ = self.run_main(["--host", "10.1.7.102"])
         self.assertEqual(status, 0)
-        server.assert_called_once_with(("0.0.0.0", 8000), "10.1.7.102", 6000)
+        server.assert_called_once_with(("0.0.0.0", 8000), "10.1.7.102", 6000, None)
         self.assertIn("open http://10.1.7.18:8000", out)
+
+    def test_passes_the_battery_threshold_to_the_server(self):
+        with unittest.mock.patch.object(pixer_web, "PixerWebServer") as server, \
+                unittest.mock.patch.object(pixer, "local_source_address", return_value="10.1.7.18"):
+            server.return_value.serve_forever.side_effect = KeyboardInterrupt
+            self.run_main(["--host", "10.1.7.102", "--min-battery", "20"])
+        server.assert_called_once_with(("0.0.0.0", 8000), "10.1.7.102", 6000, 20)
 
 
 if __name__ == "__main__":

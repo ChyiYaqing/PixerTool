@@ -4,6 +4,7 @@ import shutil
 import socket
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -22,6 +23,15 @@ CARD_SPEC = importlib.util.spec_from_file_location("make_test_card", CARD_PATH)
 make_test_card = importlib.util.module_from_spec(CARD_SPEC)
 assert CARD_SPEC.loader is not None
 CARD_SPEC.loader.exec_module(make_test_card)
+
+
+def setUpModule():
+    # Keep the tests' frame locks away from real uploads on this computer. Set the
+    # attribute directly: some tests end with patch.stopall, which would undo a patch.
+    folder = tempfile.TemporaryDirectory()
+    unittest.addModuleCleanup(folder.cleanup)
+    unittest.addModuleCleanup(setattr, pixer_upload, "LOCK_DIR", pixer_upload.LOCK_DIR)
+    pixer_upload.LOCK_DIR = Path(folder.name)
 
 
 class PixerEncodingTests(unittest.TestCase):
@@ -747,11 +757,88 @@ class MinimumBatteryTests(unittest.TestCase):
         self.mocks["build_payload"].assert_not_called()
         self.mocks["upload_payload"].assert_not_called()
 
+    def test_an_upload_gives_up_while_another_holds_the_frame(self):
+        self.battery(80)
+        with unittest.mock.patch.object(pixer_upload, "LOCK_WAIT", 0.05), \
+                pixer_upload.frame_lock("192.168.1.1", 6000, wait=0):
+            self.assertEqual(pixer_upload.main([str(self.image), "--min-battery", "20"]), 1)
+
+        self.assertIn("still running", self.err.getvalue())
+        self.mocks["read_status"].assert_not_called()
+        self.mocks["upload_payload"].assert_not_called()
+
+    def test_a_dry_run_does_not_wait_for_the_frame(self):
+        with pixer_upload.frame_lock("192.168.1.1", 6000, wait=0):
+            self.assertEqual(pixer_upload.main([str(self.image), "--dry-run"]), 0)
+
     def test_the_threshold_must_be_a_percentage(self):
         for value in ("0", "101", "half"):
             with self.subTest(value=value), self.assertRaises(SystemExit):
                 pixer_upload.main([str(self.image), "--min-battery", value])
         self.assertIn("between 1 and 100", self.err.getvalue())
+
+
+class FrameLockTests(unittest.TestCase):
+    def test_a_second_holder_is_refused_until_the_first_lets_go(self):
+        with pixer_upload.frame_lock("10.0.0.5", 6000, wait=0):
+            with self.assertRaisesRegex(pixer_upload.FrameBusy, "10.0.0.5:6000 is still running"):
+                with pixer_upload.frame_lock("10.0.0.5", 6000, wait=0):
+                    pass
+        with pixer_upload.frame_lock("10.0.0.5", 6000, wait=0):
+            pass
+
+    def test_other_frames_are_not_blocked(self):
+        with pixer_upload.frame_lock("10.0.0.5", 6000, wait=0):
+            with pixer_upload.frame_lock("10.0.0.6", 6000, wait=0):
+                pass
+
+    def test_a_waiter_gets_the_frame_when_the_holder_finishes(self):
+        holding = pixer_upload.frame_lock("10.0.0.5", 6000, wait=0)
+        holding.__enter__()
+        timer = threading.Timer(0.2, holding.__exit__, (None, None, None))
+        timer.start()
+        self.addCleanup(timer.join)
+
+        with unittest.mock.patch.object(pixer_upload, "LOCK_POLL", 0.01):
+            with pixer_upload.frame_lock("10.0.0.5", 6000, wait=5):
+                pass
+
+    def test_waiting_never_sleeps_past_the_deadline(self):
+        with pixer_upload.frame_lock("10.0.0.5", 6000, wait=0), \
+                unittest.mock.patch.object(pixer_upload.time, "sleep") as sleep:
+            with self.assertRaises(pixer_upload.FrameBusy):
+                with pixer_upload.frame_lock("10.0.0.5", 6000, wait=0.05):
+                    pass
+        self.assertTrue(sleep.call_args_list)
+        self.assertTrue(all(call.args[0] <= 0.05 for call in sleep.call_args_list))
+
+    def test_another_process_holding_the_frame_is_seen(self):
+        script = (
+            "import importlib.util, sys\n"
+            "from pathlib import Path\n"
+            "spec = importlib.util.spec_from_file_location('pixer_upload', sys.argv[1])\n"
+            "module = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(module)\n"
+            "module.LOCK_DIR = Path(sys.argv[2])\n"
+            "with module.frame_lock('10.0.0.5', 6000, wait=0):\n"
+            "    print('held', flush=True)\n"
+            "    sys.stdin.read()\n"
+        )
+        holder = subprocess.Popen(
+            [sys.executable, "-c", script, str(MODULE_PATH), str(pixer_upload.LOCK_DIR)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+        )
+        self.addCleanup(holder.wait, 5)
+        self.assertEqual(holder.stdout.readline(), "held\n")
+
+        with self.assertRaises(pixer_upload.FrameBusy):
+            with pixer_upload.frame_lock("10.0.0.5", 6000, wait=0):
+                pass
+        holder.stdin.close()
+        holder.wait(5)
+        holder.stdout.close()
+        with pixer_upload.frame_lock("10.0.0.5", 6000, wait=0):
+            pass
 
 
 class TransferFailureTests(unittest.TestCase):
