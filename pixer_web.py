@@ -163,23 +163,26 @@ class UploadHandler(BaseHTTPRequestHandler):
             self.reply(HTTPStatus.CONFLICT, "Another photo is being sent. Try again in a moment.")
             return
         try:
-            try:
-                image = self.read_body(length)
-            except socket.timeout:
-                self.close_connection = True
-                self.reply(HTTPStatus.REQUEST_TIMEOUT, "The upload took too long. Try again.")
-                return
-            if len(image) != length:
-                self.close_connection = True
-                self.reply(HTTPStatus.BAD_REQUEST, "The photo did not arrive completely.")
-                return
-            problem = image_problem(image)
-            if problem:
-                self.reply(HTTPStatus.BAD_REQUEST, problem)
-                return
-            self.send_to_frame(image, fit)
+            status, message = self.receive(length, fit)
         finally:
+            # Free the frame before replying: a client may send its next photo as
+            # soon as it reads the reply.
             self.server.frame_lock.release()
+        self.reply(status, message)
+
+    def receive(self, length: int, fit: str) -> tuple[HTTPStatus, str]:
+        try:
+            image = self.read_body(length)
+        except socket.timeout:
+            self.close_connection = True
+            return HTTPStatus.REQUEST_TIMEOUT, "The upload took too long. Try again."
+        if len(image) != length:
+            self.close_connection = True
+            return HTTPStatus.BAD_REQUEST, "The photo did not arrive completely."
+        problem = image_problem(image)
+        if problem:
+            return HTTPStatus.BAD_REQUEST, problem
+        return self.send_to_frame(image, fit)
 
     def read_body(self, length: int) -> bytes:
         """Read the photo, giving up after UPLOAD_DEADLINE however steadily it trickles in."""
@@ -196,7 +199,7 @@ class UploadHandler(BaseHTTPRequestHandler):
             body.extend(chunk)
         return bytes(body)
 
-    def send_to_frame(self, image: bytes, fit: str) -> None:
+    def send_to_frame(self, image: bytes, fit: str) -> tuple[HTTPStatus, str]:
         with tempfile.TemporaryDirectory(prefix="pixer-web-") as folder:
             path = Path(folder) / "upload"
             path.write_bytes(image)
@@ -204,16 +207,14 @@ class UploadHandler(BaseHTTPRequestHandler):
                 payload, _, _ = pixer.build_payload(path, "auto", fit)
             except (pixer.PixerError, ValueError, OSError) as exc:
                 detail = str(exc).replace(str(path), "the photo")
-                self.reply(HTTPStatus.BAD_REQUEST, f"This photo could not be converted: {detail}")
-                return
+                return HTTPStatus.BAD_REQUEST, f"This photo could not be converted: {detail}"
         try:
             pixer.upload_payload(
                 payload, self.server.frame_host, self.server.frame_port, progress_stream=io.StringIO()
             )
         except (pixer.PixerError, OSError) as exc:
-            self.reply(HTTPStatus.BAD_GATEWAY, f"The frame did not take the photo: {exc}")
-            return
-        self.reply(HTTPStatus.OK, "The frame received the photo and is redrawing.")
+            return HTTPStatus.BAD_GATEWAY, f"The frame did not take the photo: {exc}"
+        return HTTPStatus.OK, "The frame received the photo and is redrawing."
 
     def reply(self, status: HTTPStatus, message: str) -> None:
         body = json.dumps({"ok": status == HTTPStatus.OK, "message": message}).encode("utf-8")
