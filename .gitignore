@@ -12,3 +12,7 @@ __pycache__/
 
 # The 13 MB original of the README photo; the committed JPEG is derived from it.
 misc/images/GPixer-Hello.png
+
+# Daily English pools quote films and shows; keep them local. Only the example is committed.
+misc/english/*.json
+!misc/english/example.json
