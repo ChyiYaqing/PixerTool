@@ -1,0 +1,11 @@
+{
+  "source": "Workplace English · Progress & Delays",
+  "cards": [
+    {"quote": "We're on track to ship by the end of the month.", "term": "on track", "cn": "照目前的进度，预计能按期完成"},
+    {"quote": "The release will probably slip by a few days.", "term": "slip", "cn": "（日期、进度）往后拖、延误"},
+    {"quote": "We're blocked on the API team, so I've reached out to them.", "term": "blocked on", "cn": "被……卡住，要等对方才能继续"},
+    {"quote": "I'd rather under-promise and over-deliver on this one.", "term": "under-promise and over-deliver", "cn": "少承诺、多交付"},
+    {"quote": "Who's going to own the next steps here?", "term": "own", "cn": "负责（某件事），对结果负责"},
+    {"quote": "We need to watch out for scope creep on this project.", "term": "scope creep", "cn": "范围蔓延（需求越加越多，超出原定范围）"}
+  ]
+}

@@ -144,6 +144,22 @@ def load_pool(path: Path) -> tuple[str, list[dict]]:
     return data["source"], cards
 
 
+def load_pools(paths: list[Path]) -> list[dict]:
+    """Every card from every pool, each carrying its own pool's source."""
+    cards: list[dict] = []
+    seen: dict[str, Path] = {}
+    for path in paths:
+        source, pool = load_pool(path)
+        for card in pool:
+            # The card shows ' as ’, so lines that differ only there look the same.
+            shown = card["quote"].replace("'", "’")
+            if shown in seen:
+                raise ValueError(f"{path} repeats a quote from {seen[shown]}: {card['quote']}")
+            seen[shown] = path
+            cards.append({**card, "source": source})
+    return cards
+
+
 def pick_card(cards: list[dict], state: dict, today: str, rng: random.Random) -> tuple[dict, dict]:
     """Keep one card all day; show every card once before any repeats."""
     by_quote = {card["quote"]: card for card in cards}
@@ -219,7 +235,8 @@ def build_parser() -> argparse.ArgumentParser:
     extract = commands.add_parser("extract", help="list candidate lines from an .srt file")
     extract.add_argument("subtitles", type=Path)
     card = commands.add_parser("card", help="render today's card from a pool")
-    card.add_argument("pool", type=Path)
+    card.add_argument("pools", nargs="+", type=Path, metavar="pool",
+                      help="one or more pools; their cards rotate together")
     card.add_argument("-o", "--output", type=Path, default=Path("daily-english.png"))
     card.add_argument("--state", type=Path, default=DEFAULT_STATE,
                       help=f"remembers which lines have shown (default: {DEFAULT_STATE})")
@@ -237,11 +254,11 @@ def main(argv: list[str] | None = None) -> int:
             for sentence, word in candidates(parse_srt(text)):
                 print(f"{word}\t{sentence}")
             return 0
-        source, cards = load_pool(args.pool)
+        cards = load_pools(args.pools)
         day = args.date or dt.date.today()
         state = json.loads(args.state.read_text(encoding="utf-8")) if args.state.is_file() else {}
         card, state = pick_card(cards, state, day.isoformat(), random.Random())
-        render(card_page(card, source, day), args.output, args.chrome)
+        render(card_page(card, card["source"], day), args.output, args.chrome)
         save_state(args.state, state)
         print(f"{args.output}: {card['quote']}")
         return 0

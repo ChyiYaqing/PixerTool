@@ -196,6 +196,15 @@ failed upload can simply be retried, and every card shows once before any
 repeats. `~/.pixer_english_state.json`
 remembers what has shown; `--state` moves it.
 
+`card` takes several pools at once and rotates their cards together; each card
+shows its own pool's source. A line that appears in two pools is an error.
+Four pools of workplace English (meetings, code review, progress and delays,
+email and Slack) ship with the project:
+
+```bash
+python3 misc/daily_english.py card misc/english/my-show.json misc/english/work-*.json -o /tmp/english.png
+```
+
 To build a pool, list candidate lines from a subtitle file, then pick the ones
 worth learning and write their glosses by hand:
 
@@ -205,7 +214,8 @@ python3 misc/daily_english.py extract episode.srt
 
 Each line prints as the word that caught it, a tab, and the sentence. Pools
 quote films and shows, so keep them local: Git ignores every
-`misc/english/*.json` except the example.
+`misc/english/*.json` except the example and the `work-*.json` pools, which
+were written for this project.
 
 ### Join an existing Wi-Fi network
 
