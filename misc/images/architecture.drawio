@@ -1,0 +1,111 @@
+<mxfile host="drawio">
+  <diagram id="pixertool-architecture" name="Architecture">
+    <mxGraphModel dx="1400" dy="960" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1340" pageHeight="940" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Containers -->
+        <mxCell id="pi" value="Raspberry Pi 3B+ (always on)" style="rounded=1;arcSize=3;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;verticalAlign=top;align=left;spacingLeft=14;spacingTop=8;fontSize=15;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="250" y="190" width="660" height="630" as="geometry" />
+        </mxCell>
+        <mxCell id="mini" value="Mac mini" style="rounded=1;arcSize=4;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;verticalAlign=top;align=left;spacingLeft=14;spacingTop=8;fontSize=15;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="280" width="320" height="210" as="geometry" />
+        </mxCell>
+
+        <!-- Raspberry Pi components -->
+        <mxCell id="cron" value="&lt;b&gt;cron&lt;/b&gt;&lt;br&gt;07:30 English card · 08:40 Trending &lt;i&gt;prepare&lt;/i&gt; · every 10 min, 09:00–18:50, Trending &lt;i&gt;next&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="280" y="240" width="600" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="english" value="&lt;b&gt;misc/daily_english.py&lt;/b&gt;&lt;br&gt;one line a day from&lt;br&gt;misc/english/*.json pools" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="280" y="340" width="260" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="trending" value="&lt;b&gt;misc/github_trending.py&lt;/b&gt;&lt;br&gt;top 10 → one card each&lt;br&gt;~/pixer-trending/cards" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="620" y="340" width="260" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="chrome" value="&lt;b&gt;headless Chromium&lt;/b&gt;&lt;br&gt;HTML → 1872 × 1404 PNG" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="450" y="490" width="260" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="web" value="&lt;b&gt;pixer_web.py&lt;/b&gt; :8000&lt;br&gt;photo page, started @reboot" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="280" y="610" width="230" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="upload" value="&lt;b&gt;pixer_upload.py&lt;/b&gt;&lt;br&gt;battery check · ffmpeg ·&lt;br&gt;16-gray dither · imagebin" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="620" y="600" width="260" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="lock" value="/tmp/pixer-HOST-PORT.lock — one upload at a time" style="shape=note;size=14;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="400" y="745" width="360" height="45" as="geometry" />
+        </mxCell>
+
+        <!-- Mac mini components -->
+        <mxCell id="proxy" value="&lt;b&gt;HTTPS proxy&lt;/b&gt; :1082" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="330" width="260" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="ollama" value="&lt;b&gt;Ollama&lt;/b&gt; :11434&lt;br&gt;gemma4:e4b" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="410" width="260" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Outside -->
+        <mxCell id="github" value="&lt;b&gt;GitHub&lt;/b&gt;&lt;br&gt;github.com/trending&lt;br&gt;api.github.com (README)" style="ellipse;shape=cloud;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="110" width="260" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="phone" value="&lt;b&gt;Phone browser&lt;/b&gt;&lt;br&gt;same Wi-Fi" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="10" y="615" width="150" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="laptop" value="&lt;b&gt;Mac or Linux&lt;/b&gt;&lt;br&gt;python3 pixer_upload.py photo.jpg" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="10" y="860" width="300" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="frame" value="&lt;b&gt;G+ Pixer frame&lt;/b&gt;&lt;br&gt;1872 × 1404 · 16 grays&lt;br&gt;TCP :6000" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#333333;strokeColor=#111111;fontColor=#ffffff;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="600" width="260" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- Edges -->
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;strokeColor=#6c8ebf;fontSize=12;" edge="1" parent="1" source="cron" target="english">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;strokeColor=#6c8ebf;fontSize=12;" edge="1" parent="1" source="cron" target="trending">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;strokeColor=#333333;" edge="1" parent="1" source="english" target="chrome">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;strokeColor=#333333;" edge="1" parent="1" source="trending" target="chrome">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" value="card PNG" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;strokeColor=#333333;fontSize=12;labelBackgroundColor=#f5f5f5;" edge="1" parent="1" source="chrome" target="upload">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" value="HTTPS" style="edgeStyle=orthogonalEdgeStyle;exitX=1;exitY=0.15;exitDx=0;exitDy=0;entryX=0;entryY=0.5;html=1;endArrow=block;strokeColor=#333333;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="trending" target="proxy">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" style="html=1;endArrow=block;strokeColor=#333333;" edge="1" parent="1" source="proxy" target="github">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" value="README →&lt;br&gt;summary" style="edgeStyle=orthogonalEdgeStyle;exitX=1;exitY=0.9;exitDx=0;exitDy=0;entryX=0;entryY=0.5;html=1;endArrow=block;startArrow=none;strokeColor=#82b366;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="trending" target="ollama">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" value="photo&lt;br&gt;(HTTP)" style="html=1;endArrow=block;strokeColor=#333333;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="phone" target="web">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" value="convert&lt;br&gt;+ upload" style="html=1;endArrow=block;strokeColor=#333333;fontSize=12;labelBackgroundColor=#f5f5f5;" edge="1" parent="1" source="web" target="upload">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" value="#file# header&lt;br&gt;+ image" style="html=1;endArrow=block;strokeColor=#111111;strokeWidth=2;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="upload" target="frame">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=none;dashed=1;strokeColor=#d6b656;" edge="1" parent="1" source="web" target="lock">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e13" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=none;dashed=1;strokeColor=#d6b656;" edge="1" parent="1" source="upload" target="lock">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e14" value="direct upload" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;strokeColor=#111111;strokeWidth=2;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="laptop" target="frame">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1160" y="890" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -49,6 +49,36 @@ steps are reproduced byte-for-byte here and covered by unit tests.
 
 The full wire format is documented in [PROTOCOL.md](PROTOCOL.md).
 
+## How the pieces fit
+
+<p align="center">
+  <img src="misc/images/architecture.png" width="900"
+       alt="Architecture: a Raspberry Pi runs pixer_web.py, cron jobs for the English and GitHub Trending cards, and pixer_upload.py, which sends every image to the frame over TCP port 6000; a Mac mini provides Ollama and an HTTPS proxy to GitHub">
+</p>
+
+`pixer_upload.py` is the only part that talks to the frame; everything else
+makes an image and hands it over. On its own it runs from any Mac or Linux
+computer. The setup above adds a small always-on computer, here a Raspberry Pi
+3B+:
+
+- `pixer_web.py` starts at boot, so phones on the same Wi-Fi can send photos.
+- cron renders the [daily English card](#show-a-daily-english-card) at 07:30,
+  prepares the [GitHub Trending](#rotate-github-trending) cards at 08:40, and
+  shows the next Trending card every 10 minutes from 09:00 to 18:50. Both
+  render HTML to a 1872 x 1404 PNG with headless Chromium.
+- The Trending cards need GitHub, reached here through an HTTPS proxy, and an
+  Ollama server to summarise each README; both run on a Mac mini.
+- Every upload on the Pi takes the same lock file in `/tmp`, so a phone photo
+  and a scheduled card never reach the frame at the same time.
+
+The diagram's source is `misc/images/architecture.drawio`. Edit it in
+[draw.io](https://www.drawio.com), then export the PNG:
+
+```bash
+/Applications/draw.io.app/Contents/MacOS/draw.io -x -f png -s 2 -b 24 \
+  -o misc/images/architecture.png misc/images/architecture.drawio
+```
+
 ## Requirements
 
 - Python 3.9 or newer (no packages to install)
