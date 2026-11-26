@@ -1,0 +1,12 @@
+{
+  "source": "Workplace English · Meetings",
+  "cards": [
+    {"quote": "Just so we're on the same page, you mean next Friday?", "term": "on the same page", "cn": "理解一致；想法对齐（确认时用）"},
+    {"quote": "I see your point, but I'd push back on the timeline.", "term": "push back on", "cn": "对……提出异议"},
+    {"quote": "Sorry to jump in, but can I add one thing?", "term": "jump in", "cn": "插话；打断一下（礼貌地加入讨论）"},
+    {"quote": "Let's take this offline so we don't hold everyone up.", "term": "take this offline", "cn": "会后单独聊，不占用大家时间"},
+    {"quote": "Could you walk me through how you got that number?", "term": "walk me through", "cn": "一步一步给我讲讲"},
+    {"quote": "Let me play devil's advocate for a second.", "term": "play devil’s advocate", "cn": "故意站在反方提问（检验观点）"},
+    {"quote": "Let's circle back to this once we have the data.", "term": "circle back", "cn": "稍后再回头讨论"}
+  ]
+}

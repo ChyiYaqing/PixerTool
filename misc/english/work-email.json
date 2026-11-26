@@ -1,0 +1,11 @@
+{
+  "source": "Workplace English · Email & Slack",
+  "cards": [
+    {"quote": "Just following up on my email from last week.", "term": "follow up on", "cn": "就之前的事再联系一下（礼貌地催进度）"},
+    {"quote": "Quick heads-up: I'll be out of the office tomorrow.", "term": "heads-up", "cn": "提前打个招呼；预先提醒"},
+    {"quote": "No rush, but could you take a look when you get a chance?", "term": "when you get a chance", "cn": "等你有空的时候（客气地请人帮忙）"},
+    {"quote": "I don't have the bandwidth for this until next week.", "term": "bandwidth", "cn": "能腾出来的时间和精力"},
+    {"quote": "Looping in our designer, who knows more about this.", "term": "loop in", "cn": "把某人拉进来（加进邮件或讨论）"},
+    {"quote": "Happy to hop on a call if that's easier.", "term": "hop on a call", "cn": "一起通个电话或开个线上会"}
+  ]
+}

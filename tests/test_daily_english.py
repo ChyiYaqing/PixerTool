@@ -8,6 +8,7 @@ import struct
 import sys
 import tempfile
 import unittest
+import unittest.mock
 import zlib
 from pathlib import Path
 
@@ -184,6 +185,41 @@ class PoolTests(unittest.TestCase):
                 with self.subTest(data=data), self.assertRaises(ValueError):
                     daily_english.load_pool(self.write(folder, data))
 
+    def test_pools_keep_their_own_source(self):
+        other = {"source": "Work", "cards": [{"quote": "Let's circle back.", "term": "circle back", "cn": "回头再谈"}]}
+        with tempfile.TemporaryDirectory() as folder:
+            first = self.write(folder, POOL)
+            second = Path(folder) / "work.json"
+            second.write_text(json.dumps(other), encoding="utf-8")
+            cards = daily_english.load_pools([first, second])
+        self.assertEqual([card["source"] for card in cards], ["Show (2022)"] * 3 + ["Work"])
+        self.assertEqual(cards[-1]["quote"], "Let's circle back.")
+
+    def test_rejects_a_quote_repeated_across_pools(self):
+        other = {"source": "Work", "cards": [POOL["cards"][1]]}
+        with tempfile.TemporaryDirectory() as folder:
+            first = self.write(folder, POOL)
+            second = Path(folder) / "work.json"
+            second.write_text(json.dumps(other), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "repeats a quote from"):
+                daily_english.load_pools([first, second])
+
+    def test_rejects_quotes_that_differ_only_in_apostrophes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            paths = []
+            for name, quote in (("a.json", "We're on track."), ("b.json", "We’re on track.")):
+                path = Path(folder) / name
+                path.write_text(json.dumps({"source": name, "cards": [
+                    {"quote": quote, "term": "on track", "cn": "按计划进行"}]}), encoding="utf-8")
+                paths.append(path)
+            with self.assertRaisesRegex(ValueError, "b.json repeats a quote from"):
+                daily_english.load_pools(paths)
+
+    def test_workplace_pools_load_together(self):
+        pools = sorted((Path(__file__).parents[1] / "misc" / "english").glob("work-*.json"))
+        self.assertEqual(len(pools), 4)
+        self.assertEqual(len(daily_english.load_pools(pools)), 25)
+
     def test_example_pool_loads(self):
         pool = Path(__file__).parents[1] / "misc" / "english" / "example.json"
         _, cards = daily_english.load_pool(pool)
@@ -297,10 +333,11 @@ class MainTests(unittest.TestCase):
         self.pool.write_text(json.dumps(POOL), encoding="utf-8")
         self.state = self.root / "state.json"
 
-    def run_card(self, chrome, date="2026-11-25"):
+    def run_card(self, chrome, date="2026-11-25", pools=None):
+        pools = [str(pool) for pool in pools or [self.pool]]
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             return daily_english.main([
-                "card", str(self.pool), "-o", str(self.root / "out.png"),
+                "card", *pools, "-o", str(self.root / "out.png"),
                 "--state", str(self.state), "--date", date, "--chrome", chrome,
             ])
 
@@ -310,6 +347,24 @@ class MainTests(unittest.TestCase):
         self.assertEqual(state["date"], "2026-11-25")
         self.assertEqual(state["shown"], [state["quote"]])
         self.assertEqual((self.root / "out.png").read_bytes(), VALID_PNG)
+
+    def test_cards_from_several_pools_rotate_together(self):
+        work = self.root / "work.json"
+        work.write_text(json.dumps({"source": "Work", "cards": [
+            {"quote": "Let's circle back.", "term": "circle back", "cn": "回头再谈"},
+            {"quote": "We're on track.", "term": "on track", "cn": "按计划进行"},
+        ]}), encoding="utf-8")
+        sources = {card["quote"]: "Show (2022)" for card in POOL["cards"]}
+        sources.update({"Let's circle back.": "Work", "We're on track.": "Work"})
+        chrome = fake_chrome(self.root)
+        with unittest.mock.patch.object(daily_english, "card_page", wraps=daily_english.card_page) as page:
+            for day in range(1, 6):
+                self.assertEqual(self.run_card(chrome, f"2026-12-0{day}", [self.pool, work]), 0)
+        shown = json.loads(self.state.read_text(encoding="utf-8"))["shown"]
+        self.assertEqual(sorted(shown), sorted(sources))
+        for call in page.call_args_list:
+            card, source, _ = call.args
+            self.assertEqual(source, sources[card["quote"]])
 
     def test_rerun_on_the_same_day_keeps_the_card(self):
         chrome = fake_chrome(self.root)

@@ -1,0 +1,11 @@
+{
+  "source": "Workplace English · Code Review",
+  "cards": [
+    {"quote": "Looks good to me overall, just a couple of nits.", "term": "nit", "cn": "（代码评审）可改可不改的小问题"},
+    {"quote": "This PR does a lot; could we break it up?", "term": "break it up", "cn": "把它拆成几个小部分"},
+    {"quote": "What's the reasoning behind this change?", "term": "the reasoning behind", "cn": "……背后的考虑、理由"},
+    {"quote": "I don't think this handles the edge case of an empty list.", "term": "edge case", "cn": "边界情况（容易漏掉的特殊输入或状态）"},
+    {"quote": "Feel free to ignore this; it's just a personal preference.", "term": "feel free to", "cn": "可以……，不用有顾虑"},
+    {"quote": "We can merge this now and fix it in a follow-up PR.", "term": "follow-up PR", "cn": "后续用来补上修改的 PR"}
+  ]
+}
