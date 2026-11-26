@@ -163,6 +163,12 @@ def prepare(directory: Path, ollama: str, model: str, chrome: str, day: dt.date)
         render(card_page(repo, rank, len(repos), day, model), fresh / f"{rank:02}.png", chrome)
     (fresh / "cards.json").write_text(
         json.dumps({"day": day.isoformat(), "repos": repos}, ensure_ascii=False, indent=1), encoding="utf-8")
+    swap_in(fresh, directory)
+    return repos
+
+
+def swap_in(fresh: Path, directory: Path) -> None:
+    """Replace directory with fresh; if the swap fails, put the old directory back."""
     old = directory.with_name(directory.name + ".old")
     shutil.rmtree(old, ignore_errors=True)
     if directory.exists():
@@ -174,7 +180,6 @@ def prepare(directory: Path, ollama: str, model: str, chrome: str, day: dt.date)
             old.rename(directory)
         raise
     shutil.rmtree(old, ignore_errors=True)
-    return repos
 
 
 def next_card(directory: Path) -> Path:

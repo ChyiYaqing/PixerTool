@@ -53,7 +53,7 @@ The full wire format is documented in [PROTOCOL.md](PROTOCOL.md).
 
 <p align="center">
   <img src="misc/images/architecture.png" width="900"
-       alt="Architecture: a Raspberry Pi runs pixer_web.py, cron jobs for the English and GitHub Trending cards, and pixer_upload.py, which sends every image to the frame over TCP port 6000; a Mac mini provides Ollama and an HTTPS proxy to GitHub">
+       alt="Architecture: a Raspberry Pi runs pixer_web.py, cron jobs for the English, GitHub Trending and Hacker News cards, and pixer_upload.py, which sends every image to the frame over TCP port 6000; a Mac mini provides Ollama and an HTTPS proxy to GitHub and Hacker News">
 </p>
 
 `pixer_upload.py` is the only part that talks to the frame; everything else
@@ -64,10 +64,13 @@ computer. The setup above adds a small always-on computer, here a Raspberry Pi
 - `pixer_web.py` starts at boot, so phones on the same Wi-Fi can send photos.
 - cron renders the [daily English card](#show-a-daily-english-card) at 07:30,
   prepares the [GitHub Trending](#rotate-github-trending) cards at 08:40, and
-  shows the next Trending card every 10 minutes from 09:00 to 18:50. Both
-  render HTML to a 1872 x 1404 PNG with headless Chromium.
-- The Trending cards need GitHub, reached here through an HTTPS proxy, and an
-  Ollama server to summarise each README; both run on a Mac mini.
+  shows the next Trending card every 10 minutes from 09:00 to 18:50. At 19:00
+  it prepares the [Hacker News](#rotate-hacker-news-in-the-evening) cards and
+  shows the next one every 30 minutes until 22:30. All of them render HTML to
+  a 1872 x 1404 PNG with headless Chromium.
+- The Trending and Hacker News cards need the internet, reached here through
+  an HTTPS proxy, and an Ollama server to summarise each README or comment
+  thread; both run on a Mac mini.
 - Every upload on the Pi takes the same lock file in `/tmp`, so a phone photo
   and a scheduled card never reach the frame at the same time.
 
@@ -269,6 +272,28 @@ the script reads the web page; if GitHub changes the page, `prepare` stops with
 an error. Requests honour the proxy variables; if GitHub needs a proxy, set
 only `HTTPS_PROXY`, or add the Ollama host to `NO_PROXY`, so the README does
 not travel to Ollama through the proxy.
+
+### Rotate Hacker News in the evening
+
+`misc/hacker_news.py` works the same way for
+[Hacker News](https://news.ycombinator.com). `prepare` takes the 30 stories on
+the front page, highest score first, and sends each story with its first few
+comments to Ollama, which writes a Chinese title, one line on what happened
+and two or three views from the comments. It keeps the first eight stories
+about software, hardware or science, and skips the rest along with stories
+that have too few comments or whose summary fails:
+
+```bash
+python3 misc/hacker_news.py prepare ~/hn --ollama http://10.1.7.106:11434
+python3 pixer_upload.py "$(python3 misc/hacker_news.py next ~/hn)" \
+  --host 10.1.7.102 --min-battery 20
+```
+
+It reads the official [Hacker News API](https://github.com/HackerNews/API), so
+it needs no account. `prepare` takes a few minutes on a Raspberry Pi (add
+`--chrome /usr/bin/chromium` there) and keeps the previous cards if no story
+could be summarised. The proxy advice above
+applies here too.
 
 ### Join an existing Wi-Fi network
 
