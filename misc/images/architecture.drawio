@@ -14,13 +14,13 @@
         </mxCell>
 
         <!-- Raspberry Pi components -->
-        <mxCell id="cron" value="&lt;b&gt;cron&lt;/b&gt;&lt;br&gt;07:30 English card · 08:40 Trending &lt;i&gt;prepare&lt;/i&gt; · every 10 min, 09:00–18:50, Trending &lt;i&gt;next&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;" vertex="1" parent="1">
-          <mxGeometry x="280" y="240" width="600" height="60" as="geometry" />
+        <mxCell id="cron" value="&lt;b&gt;cron&lt;/b&gt;&lt;br&gt;07:30 English card · 08:40 Trending &lt;i&gt;prepare&lt;/i&gt;, then &lt;i&gt;next&lt;/i&gt; every 10 min, 09:00–18:50&lt;br&gt;19:00 Hacker News &lt;i&gt;prepare&lt;/i&gt;, then &lt;i&gt;next&lt;/i&gt; every 30 min, 19:00–22:30" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="280" y="235" width="600" height="70" as="geometry" />
         </mxCell>
         <mxCell id="english" value="&lt;b&gt;misc/daily_english.py&lt;/b&gt;&lt;br&gt;one line a day from&lt;br&gt;misc/english/*.json pools" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;fontSize=14;" vertex="1" parent="1">
           <mxGeometry x="280" y="340" width="260" height="100" as="geometry" />
         </mxCell>
-        <mxCell id="trending" value="&lt;b&gt;misc/github_trending.py&lt;/b&gt;&lt;br&gt;top 10 → one card each&lt;br&gt;~/pixer-trending/cards" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;fontSize=14;" vertex="1" parent="1">
+        <mxCell id="trending" value="&lt;b&gt;misc/github_trending.py&lt;/b&gt;&lt;br&gt;&lt;b&gt;misc/hacker_news.py&lt;/b&gt;&lt;br&gt;one card per project or story" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;fontSize=14;" vertex="1" parent="1">
           <mxGeometry x="620" y="340" width="260" height="100" as="geometry" />
         </mxCell>
         <mxCell id="chrome" value="&lt;b&gt;headless Chromium&lt;/b&gt;&lt;br&gt;HTML → 1872 × 1404 PNG" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;fontSize=14;" vertex="1" parent="1">
@@ -45,8 +45,8 @@
         </mxCell>
 
         <!-- Outside -->
-        <mxCell id="github" value="&lt;b&gt;GitHub&lt;/b&gt;&lt;br&gt;github.com/trending&lt;br&gt;api.github.com (README)" style="ellipse;shape=cloud;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;fontSize=13;" vertex="1" parent="1">
-          <mxGeometry x="1030" y="110" width="260" height="130" as="geometry" />
+        <mxCell id="github" value="&lt;b&gt;GitHub · Hacker News&lt;/b&gt;&lt;br&gt;github.com/trending&lt;br&gt;api.github.com (README)&lt;br&gt;HN API (Firebase)" style="ellipse;shape=cloud;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="95" width="280" height="160" as="geometry" />
         </mxCell>
         <mxCell id="phone" value="&lt;b&gt;Phone browser&lt;/b&gt;&lt;br&gt;same Wi-Fi" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;fontSize=14;" vertex="1" parent="1">
           <mxGeometry x="10" y="615" width="150" height="60" as="geometry" />
@@ -80,7 +80,7 @@
         <mxCell id="e7" style="html=1;endArrow=block;strokeColor=#333333;" edge="1" parent="1" source="proxy" target="github">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e8" value="README →&lt;br&gt;summary" style="edgeStyle=orthogonalEdgeStyle;exitX=1;exitY=0.9;exitDx=0;exitDy=0;entryX=0;entryY=0.5;html=1;endArrow=block;startArrow=none;strokeColor=#82b366;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="trending" target="ollama">
+        <mxCell id="e8" value="README or comments&lt;br&gt;→ summary" style="edgeStyle=orthogonalEdgeStyle;exitX=1;exitY=0.9;exitDx=0;exitDy=0;entryX=0;entryY=0.5;html=1;endArrow=block;startArrow=none;strokeColor=#82b366;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="trending" target="ollama">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="e9" value="photo&lt;br&gt;(HTTP)" style="html=1;endArrow=block;strokeColor=#333333;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="phone" target="web">
