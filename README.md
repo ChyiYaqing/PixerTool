@@ -207,6 +207,29 @@ Each line prints as the word that caught it, a tab, and the sentence. Pools
 quote films and shows, so keep them local: Git ignores every
 `misc/english/*.json` except the example.
 
+### Rotate GitHub Trending
+
+`misc/github_trending.py` puts today's top ten
+[GitHub Trending](https://github.com/trending) projects on the frame, one per
+card. Each project's README goes to an [Ollama](https://ollama.com) server,
+which writes a one-line Chinese summary and two or three points. `prepare`
+renders the day's cards into a folder; `next` prints the next card's path and
+cycles through them:
+
+```bash
+python3 misc/github_trending.py prepare ~/trending --ollama http://10.1.7.106:11434
+python3 pixer_upload.py "$(python3 misc/github_trending.py next ~/trending)" \
+  --host 10.1.7.102 --min-battery 20
+```
+
+The model defaults to `gemma4:e4b`; `--model` picks another. A project whose
+README or summary fails shows its GitHub description instead, and a failed
+`prepare` keeps the previous day's cards. GitHub has no API for Trending, so
+the script reads the web page; if GitHub changes the page, `prepare` stops with
+an error. Requests honour the proxy variables; if GitHub needs a proxy, set
+only `HTTPS_PROXY`, or add the Ollama host to `NO_PROXY`, so the README does
+not travel to Ollama through the proxy.
+
 ### Join an existing Wi-Fi network
 
 Connect to the hotspot broadcast by your own frame, then run this one-time
