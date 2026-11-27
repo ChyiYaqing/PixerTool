@@ -64,10 +64,10 @@ computer. The setup above adds a small always-on computer, here a Raspberry Pi
 - `pixer_web.py` starts at boot, so phones on the same Wi-Fi can send photos.
 - cron renders the [daily English card](#show-a-daily-english-card) at 07:30,
   prepares the [GitHub Trending](#rotate-github-trending) cards at 08:40, and
-  shows the next Trending card every 10 minutes from 09:00 to 18:50. At 19:00
+  shows the next Trending card every 10 minutes from 09:00 to 18:50. At 18:40
   it prepares the [Hacker News](#rotate-hacker-news-in-the-evening) cards and
-  shows the next one every 30 minutes until 22:30. All of them render HTML to
-  a 1872 x 1404 PNG with headless Chromium.
+  shows the next one every 30 minutes from 19:00 to 22:30. All of them render
+  HTML to a 1872 x 1404 PNG with headless Chromium.
 - The Trending and Hacker News cards need the internet, reached here through
   an HTTPS proxy, and an Ollama server to summarise each README or comment
   thread; both run on a Mac mini.
@@ -265,7 +265,7 @@ python3 pixer_upload.py "$(python3 misc/github_trending.py next ~/trending)" \
   --host 10.1.7.102 --min-battery 20
 ```
 
-The model defaults to `gemma4:e4b`; `--model` picks another. A project whose
+The model defaults to `gemma4:12b`; `--model` picks another. A project whose
 README or summary fails shows its GitHub description instead, and a failed
 `prepare` keeps the previous day's cards. GitHub has no API for Trending, so
 the script reads the web page; if GitHub changes the page, `prepare` stops with

@@ -20,7 +20,7 @@ from daily_english import CHROME, render
 from github_trending import OLLAMA, get, next_card, swap_in, text
 
 API = "https://hacker-news.firebaseio.com/v0"
-MODEL = "gemma4:e4b"
+MODEL = "gemma4:12b"
 COUNT = 8
 CANDIDATES = 30
 COMMENTS = 6
