@@ -316,6 +316,42 @@ On a Raspberry Pi, add `--chrome /usr/bin/chromium` to both commands. The
 sentence builds on the evening's summaries, so a summary that misreads a story
 can mislead the sentence too.
 
+### Show new mail and GitHub notifications
+
+`misc/inbox_board.py` turns unread Gmail and GitHub notifications into a card
+that takes the place of the next rotation card. `poll` checks both and renders
+a card when something is new; `take` prints that card's path once, or exits
+with status 1 when there is nothing new, so the rotation shows its usual card:
+
+```bash
+python3 misc/inbox_board.py poll ~/inbox --ollama http://10.1.7.106:11434
+card=$(python3 misc/inbox_board.py take ~/inbox || python3 misc/github_trending.py next ~/trending) &&
+  python3 pixer_upload.py "$card" --host 10.1.7.102 --min-battery 20
+```
+
+Put the credentials in `~/.config/pixer`, readable only by you
+(`chmod 600`); a source without its file is skipped:
+
+- `gmail`: the address on the first line and a Google
+  [app password](https://myaccount.google.com/apppasswords) on the second.
+  The script reads unread mail from the last two days in the Primary tab
+  over IMAP and leaves it unread. Where port 993 is blocked, set
+  `HTTPS_PROXY` to an HTTP proxy that allows `CONNECT`; IMAP then goes
+  through it like the GitHub requests.
+- `github-token`: a classic personal access token with only the
+  `notifications` scope. Fine-grained tokens cannot read notifications.
+
+The card shows each sender with one Chinese line from Ollama. When the subject
+or body mentions a code, a password, a bank or an amount of money, the card
+shows only the sender and a notice, and that mail never goes to the model.
+The check is a word list, so it can miss a code that is not labelled as one.
+A mail over 1 MB is judged by its subject alone, since its body is never
+downloaded. The card reads the first 50 GitHub notifications; while more are
+unread, read ones may stay on the card.
+Only the sender and the card's line are kept on disk; the mail itself is not
+written to disk or to logs. An item read on the phone leaves the card at the
+next poll.
+
 ### Join an existing Wi-Fi network
 
 Connect to the hotspot broadcast by your own frame, then run this one-time
