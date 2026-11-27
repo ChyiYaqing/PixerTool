@@ -63,11 +63,13 @@ computer. The setup above adds a small always-on computer, here a Raspberry Pi
 
 - `pixer_web.py` starts at boot, so phones on the same Wi-Fi can send photos.
 - cron renders the [daily English card](#show-a-daily-english-card) at 07:30,
-  prepares the [GitHub Trending](#rotate-github-trending) cards at 08:40, and
-  shows the next Trending card every 10 minutes from 09:00 to 18:50. At 18:40
-  it prepares the [Hacker News](#rotate-hacker-news-in-the-evening) cards and
-  shows the next one every 30 minutes from 19:00 to 22:30. All of them render
-  HTML to a 1872 x 1404 PNG with headless Chromium.
+  or [one from last night's news](#learn-english-from-last-nights-news) when
+  it can, prepares the [GitHub Trending](#rotate-github-trending) cards at
+  08:40, and shows the next Trending card every 10 minutes from 09:00 to
+  18:50. At 18:40 it prepares the [Hacker
+  News](#rotate-hacker-news-in-the-evening) cards and shows the next one every
+  30 minutes from 19:00 to 22:30. All of them render HTML to a 1872 x 1404 PNG
+  with headless Chromium.
 - The Trending and Hacker News cards need the internet, reached here through
   an HTTPS proxy, and an Ollama server to summarise each README or comment
   thread; both run on a Mac mini.
@@ -294,6 +296,25 @@ it needs no account. `prepare` takes a few minutes on a Raspberry Pi (add
 `--chrome /usr/bin/chromium` there) and keeps the previous cards if no story
 could be summarised. The proxy advice above
 applies here too.
+
+### Learn English from last night's news
+
+`misc/news_english.py` reads the `cards.json` that `hacker_news.py prepare`
+writes and asks Ollama for one sentence a colleague would say at work about
+one of those stories: the situation in Chinese, the sentence, its meaning and
+one phrase to remember. It renders the card like the daily English card. When
+the cards are not from last night, or no story fits, it exits with status 1,
+so the daily English card can show instead:
+
+```bash
+{ python3 misc/news_english.py ~/hn/cards.json -o /tmp/english.png --ollama http://10.1.7.106:11434 ||
+  python3 misc/daily_english.py card misc/english/work-*.json -o /tmp/english.png; } &&
+  python3 pixer_upload.py /tmp/english.png --host 10.1.7.102 --min-battery 20
+```
+
+On a Raspberry Pi, add `--chrome /usr/bin/chromium` to both commands. The
+sentence builds on the evening's summaries, so a summary that misreads a story
+can mislead the sentence too.
 
 ### Join an existing Wi-Fi network
 
