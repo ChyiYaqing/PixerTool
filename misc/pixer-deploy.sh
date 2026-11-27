@@ -3,7 +3,8 @@
 # passed on exactly that commit, fast-forward this checkout to it and run the tests; if they fail
 # here, go back to the previous commit. Cron runs it every 10 minutes at :05, :15 ... so it never
 # starts alongside the card jobs; it prints nothing when there is nothing to do:
-#   5-59/10 * * * * flock -n /tmp/pixer-deploy.lock $HOME/chyi/github/PixerTool/misc/pixer-deploy.sh
+#   5-59/10 * * * * flock -n -o /tmp/pixer-deploy.lock $HOME/chyi/github/PixerTool/misc/pixer-deploy.sh
+# (-o keeps the lock out of the pixer_web.py this may restart, which would otherwise hold it for good.)
 # A deploy may update this script while it runs; git writes a new file rather than rewriting this
 # one in place, so the running copy is not disturbed.
 # GitHub is reached through the Mac mini's proxy, like the card jobs; both git and Python honour it.
@@ -31,7 +32,7 @@ report() {  # log "$1" for this commit unless it was the last thing logged
 verdict=$(python3 - "$sha" "$CHECKS" <<'PY'
 import json, sys, urllib.request
 sha, wanted = sys.argv[1], set(sys.argv[2].splitlines())
-url = f"https://api.github.com/repos/ChyiYaqing/PixerTool/commits/{sha}/check-runs?per_page=100"
+url = f"https://api.github.com/repos/ChyiYaqing/PixerTool/commits/{sha}/check-runs?filter=latest&per_page=100"  # latest run of each check
 request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "pixer-deploy"})
 runs = {r["name"]: r for r in json.load(urllib.request.urlopen(request, timeout=30))["check_runs"]}
 if any(runs.get(n, {}).get("status") != "completed" for n in wanted):
@@ -45,6 +46,8 @@ PY
 case "$verdict" in
   pending) report "waiting for CI"; exit 0 ;;
   failed) report "CI failed, not deployed"; exit 1 ;;
+  success) ;;
+  *) exit 1 ;;
 esac
 
 {
@@ -56,9 +59,9 @@ esac
   fi
   git log --oneline -1
   if out=$(python3 -m unittest discover -s tests 2>&1); then
-    echo "$out" | tail -n 3
+    printf '%s\n' "$out" | tail -n 3  # dash's echo would interpret backslashes
   else
-    echo "$out" | tail -n 30
+    printf '%s\n' "$out" | tail -n 30
     if git reset -q --keep "$prev"; then
       echo "tests failed on the Pi; back on $prev"
     else
@@ -73,8 +76,9 @@ esac
     sleep 2
     # Same command as the @reboot line in crontab.
     nohup python3 pixer_web.py --host 10.1.7.102 --min-battery 20 >> "$HOME/pixer-web.log" 2>&1 &
+    web=$!
     sleep 5
-    if pgrep -f "python3 pixer_web.py" > /dev/null; then
+    if kill -0 "$web" 2> /dev/null; then  # the new process, not an old one that lingered
       echo "restarted pixer_web.py"
     else
       echo "pixer_web.py DID NOT restart; see ~/pixer-web.log"
