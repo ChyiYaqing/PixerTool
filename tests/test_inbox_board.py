@@ -363,9 +363,79 @@ class PollTests(unittest.TestCase):
         self.run_poll({111: mail()}, [])
         self.assertEqual(self.pending(), ["gmail:111"])
         self.assertTrue((self.cards / "pending.png").is_file())
-        ib.take(self.cards)
+        ib.done(self.cards, ib.take(self.cards))
         new, _ = self.run_poll({111: mail()}, [])
         self.assertEqual((new, self.pending()), ([], []))  # not shown a second time
+
+    def test_a_failed_upload_shows_the_items_again(self):
+        self.run_poll({111: mail()}, [])
+        self.assertIsNotNone(ib.take(self.cards))  # the upload then fails: no done
+        card = ib.take(self.cards)
+        self.assertEqual(card.read_bytes(), b"png")
+        ib.done(self.cards, card)
+        self.assertEqual((self.pending(), ib.take(self.cards)), ([], None))
+        self.assertFalse((self.cards / "pending.png").exists())
+        self.assertFalse(card.exists())
+
+    def test_overlapping_rotations_clear_only_what_each_showed(self):
+        self.run_poll({111: mail()}, [])
+        first = ib.take(self.cards)  # waits for the frame...
+        self.run_poll({111: mail()}, [notification(7)])
+        second = ib.take(self.cards)  # ...while the next rotation takes A+B
+        self.assertNotEqual(first, second)
+        ib.done(self.cards, first)
+        self.assertEqual(self.pending(), ["github:7:2026-11-27T05:50:00Z"])  # B was not on the first card
+        ib.done(self.cards, second)
+        self.assertEqual(self.pending(), [])
+
+    def test_items_beyond_the_card_wait_for_the_next_one(self):
+        mails = {n: mail(subject=f"S{n}") for n in range(1, 8)}
+        self.run_poll(mails, [])
+        self.assertIn("另有 2 条", self.rendered[-1])
+        ib.done(self.cards, ib.take(self.cards))
+        self.assertEqual(len(self.pending()), 2)  # not on that card, so not cleared
+        self.run_poll(mails, [])
+        self.assertNotIn("另有", self.rendered[-1])
+        ib.done(self.cards, ib.take(self.cards))
+        self.assertEqual(self.pending(), [])
+
+    def test_old_failed_copies_are_cleaned_up(self):
+        self.run_poll({111: mail()}, [])
+        cards = [ib.take(self.cards) for _ in range(5)]
+        self.assertEqual([c.exists() for c in cards], [False, False, True, True, True])
+        self.assertEqual(len(ib.read_state(self.cards)["taken"]), 3)
+        orphan = self.cards / "shown-0123456789ab.png"
+        orphan.write_bytes(b"left by a crash before the state was written")
+        ib.take(self.cards)
+        self.assertFalse(orphan.exists())
+        self.assertEqual(len([c for c in self.cards.glob("shown-*.png") if ib.COPY.fullmatch(c.name)]), 3)
+
+    def test_take_leaves_other_files_alone(self):
+        self.run_poll({111: mail()}, [])
+        (self.cards / "shown-family.png").write_bytes(b"mine")
+        (self.cards / "shown-0123456789ab.png").mkdir()
+        self.assertIsNotNone(ib.take(self.cards))
+        self.assertTrue((self.cards / "shown-family.png").exists())
+        self.assertTrue((self.cards / "shown-0123456789ab.png").is_dir())
+
+    def test_items_that_came_after_the_take_stay_and_are_drawn_again(self):
+        self.run_poll({111: mail()}, [])
+        card = ib.take(self.cards)
+        self.run_poll({111: mail()}, [notification(7)])  # B arrives while A is on its way to the frame
+        ib.done(self.cards, card)
+        self.assertEqual(self.pending(), ["github:7:2026-11-27T05:50:00Z"])
+        self.assertIsNone(ib.take(self.cards))  # pending.png still shows A too
+        self.run_poll({111: mail()}, [notification(7)])
+        self.assertNotIn("Lunch", self.rendered[-1].split("<ul>")[1])
+        self.assertIsNotNone(ib.take(self.cards))
+
+    def test_done_after_another_card_changes_nothing(self):
+        self.run_poll({111: mail()}, [])
+        card = ib.take(self.cards)
+        ib.done(self.cards, self.root / "trending" / "card-3.png")  # the take's card never went up
+        ib.done(self.cards, self.cards / "shown-1.png")  # not one this folder handed out
+        self.assertEqual(self.pending(), ["gmail:111"])
+        self.assertTrue(card.exists())
 
     def test_a_card_not_yet_drawn_is_never_taken_and_is_drawn_next_time(self):
         self.run_poll({111: mail()}, [])
@@ -377,7 +447,7 @@ class PollTests(unittest.TestCase):
         self.assertEqual(len(self.rendered), 2)
         self.run_poll({111: mail()}, [])
         self.assertEqual(len(self.rendered), 2)  # up to date: not drawn again
-        self.assertEqual(ib.take(self.cards), self.cards / "shown.png")
+        self.assertIsNotNone(ib.take(self.cards))
 
     def test_a_render_cut_short_never_shows_an_old_card_and_is_redone(self):
         self.run_poll({111: mail()}, [])
@@ -391,7 +461,7 @@ class PollTests(unittest.TestCase):
             self.run_poll({}, [], mail_error=OSError("imap down"))  # nothing answers, but the card is redrawn
         self.assertEqual(self.pending(), ["gmail:111", "github:7:2026-11-27T05:50:00Z"])
         self.assertIn("Add a board", self.rendered[-1])
-        self.assertEqual(ib.take(self.cards), self.cards / "shown.png")
+        self.assertIsNotNone(ib.take(self.cards))
 
     def test_a_stale_card_goes_when_nothing_is_pending(self):
         (self.cards / "pending.png").write_bytes(b"stale")  # drawn, then power failed before the state
@@ -416,16 +486,24 @@ class PollTests(unittest.TestCase):
 
 
 class TakeAndMainTests(unittest.TestCase):
-    def test_take_moves_the_card_once(self):
+    def test_take_then_done_from_the_command_line(self):
         with tempfile.TemporaryDirectory() as folder, mock.patch("sys.stdout") as out:
             cards = Path(folder)
             self.assertEqual(ib.main(["take", folder]), 1)  # nothing pending: quiet
             (cards / "pending.png").write_bytes(b"png")
-            (cards / "state.json").write_text(json.dumps({"seen": ["a"], "pending": [{"key": "a"}], "drawn": True}))
+            (cards / "state.json").write_text(json.dumps({"seen": ["a"], "pending": [{"key": "a", "when": "2026-11-27T05:00:00+00:00"}], "drawn": True}))
             self.assertEqual(ib.main(["take", folder]), 0)
-            self.assertIn("shown.png", "".join(c.args[0] for c in out.write.call_args_list))
+            card = "".join(c.args[0] for c in out.write.call_args_list).strip()
+            self.assertEqual(Path(card).read_bytes(), b"png")
+            self.assertEqual(ib.main(["done", folder, card]), 0)
             self.assertEqual(ib.read_state(cards)["pending"], [])
             self.assertEqual(ib.main(["take", folder]), 1)
+
+    def test_card_goes_only_with_done(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch("sys.stderr"):
+            for argv in (["done", folder], ["take", folder, "x.png"]):
+                with self.subTest(argv=argv), self.assertRaises(SystemExit):
+                    ib.main(argv)
 
     def test_a_busy_lock_returns_at_once(self):
         with tempfile.TemporaryDirectory() as folder, mock.patch("sys.stderr"), \

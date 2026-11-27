@@ -320,14 +320,22 @@ can mislead the sentence too.
 
 `misc/inbox_board.py` turns unread Gmail and GitHub notifications into a card
 that takes the place of the next rotation card. `poll` checks both and renders
-a card when something is new; `take` prints that card's path once, or exits
-with status 1 when there is nothing new, so the rotation shows its usual card:
+a card when something is new. `take` prints that card's path, or exits with
+status 1 when there is nothing new, so the rotation shows its usual card.
+`done` takes the card off once the upload has worked; until then, every
+`take` offers it again, so a skipped or failed upload loses nothing:
 
 ```bash
 python3 misc/inbox_board.py poll ~/inbox --ollama http://10.1.7.106:11434
 card=$(python3 misc/inbox_board.py take ~/inbox || python3 misc/github_trending.py next ~/trending) &&
-  python3 pixer_upload.py "$card" --host 10.1.7.102 --min-battery 20
+  python3 pixer_upload.py "$card" --host 10.1.7.102 --min-battery 20 &&
+  python3 misc/inbox_board.py done ~/inbox "$card"
 ```
+
+`done` does nothing when `$card` is not the inbox card. If you filter the
+upload's progress lines through `grep`, keep `done` inside the braces with the
+upload, as in `{ upload && done; } 2>&1 | grep -v ...`; after a pipe, `&&`
+sees grep's status, not the upload's.
 
 Put the credentials in `~/.config/pixer`, readable only by you
 (`chmod 600`); a source without its file is skipped:
