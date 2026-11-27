@@ -21,7 +21,7 @@ from daily_english import CHROME, render
 
 TRENDING = "https://github.com/trending?since=daily"
 OLLAMA = "http://localhost:11434"
-MODEL = "gemma4:e4b"
+MODEL = "gemma4:12b"
 COUNT = 10
 README_CHARS = 6000
 SCHEMA = {
