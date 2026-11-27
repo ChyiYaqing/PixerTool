@@ -9,6 +9,7 @@ import tempfile
 import threading
 import unittest
 import unittest.mock
+import zlib
 from pathlib import Path
 
 
@@ -32,6 +33,8 @@ def setUpModule():
     unittest.addModuleCleanup(folder.cleanup)
     unittest.addModuleCleanup(setattr, pixer_upload, "LOCK_DIR", pixer_upload.LOCK_DIR)
     pixer_upload.LOCK_DIR = Path(folder.name)
+    unittest.addModuleCleanup(setattr, pixer_upload, "SHOWN_PATH", pixer_upload.SHOWN_PATH)
+    pixer_upload.SHOWN_PATH = Path(folder.name) / "shown" / "shown.png"
 
 
 class PixerEncodingTests(unittest.TestCase):
@@ -69,6 +72,42 @@ class PixerEncodingTests(unittest.TestCase):
             pixer_upload.file_header(1_314_144),
             b"#file#000801314144imagebin",
         )
+
+
+def read_png(data: bytes) -> tuple[int, int, bytes]:
+    """Width, height and pixels of an 8-bit grayscale PNG without filters."""
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    chunks, at = {}, 8
+    while at < len(data):
+        length, kind = struct.unpack(">I4s", data[at:at + 8])
+        chunks[kind] = data[at + 8:at + 8 + length]
+        at += 12 + length
+    width, height, depth, color = struct.unpack(">IIBB", chunks[b"IHDR"][:10])
+    assert (depth, color) == (8, 0)
+    rows = zlib.decompress(chunks[b"IDAT"])
+    return width, height, b"".join(rows[y * (width + 1) + 1:(y + 1) * (width + 1)] for y in range(height))
+
+
+class ShownImageTests(unittest.TestCase):
+    def test_unpacking_undoes_packing_both_ways_round(self):
+        for width, height in ((6, 4), (4, 6)):
+            with self.subTest(size=(width, height)):
+                levels = bytes((i * 7 + i // 3) % 16 for i in range(width * height))
+                packed = pixer_upload.pack_4bit(levels, width, height)
+                self.assertEqual(pixer_upload.unpack_4bit(packed, width, height), levels)
+
+    def test_png_holds_the_levels_as_grays(self):
+        width, height, pixels = read_png(pixer_upload.gray_png(bytes([0, 1, 15, 8, 0, 15]), 3, 2))
+        self.assertEqual((width, height, pixels), (3, 2, bytes([0, 17, 255, 136, 0, 255])))
+
+    def test_the_shown_image_is_kept_and_a_bad_one_only_warns(self):
+        packed = pixer_upload.pack_4bit(bytes(range(16)) * 2, 4, 8)
+        pixer_upload.remember_shown(packed, 4, 8)
+        self.assertEqual(read_png(pixer_upload.SHOWN_PATH.read_bytes())[:2], (4, 8))
+        with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            pixer_upload.remember_shown(b"short", 4, 8)
+        self.assertIn("could not keep", err.getvalue())
+        self.assertEqual(list(pixer_upload.SHOWN_PATH.parent.glob("*")), [])  # no leftovers, and no stale picture
 
 
 class DitherTests(unittest.TestCase):
@@ -702,6 +741,7 @@ class MinimumBatteryTests(unittest.TestCase):
         self.out = unittest.mock.patch("sys.stdout", new_callable=io.StringIO).start()
         self.err = unittest.mock.patch("sys.stderr", new_callable=io.StringIO).start()
         self.addCleanup(unittest.mock.patch.stopall)
+        pixer_upload.SHOWN_PATH.unlink(missing_ok=True)
 
     def battery(self, level):
         self.mocks["read_status"].return_value = {"Battery": f"{level}%", "MCU firmware": "x"}
@@ -715,6 +755,12 @@ class MinimumBatteryTests(unittest.TestCase):
         self.assertIn("below --min-battery 20%", self.err.getvalue())
         self.mocks["build_payload"].assert_not_called()
         self.mocks["upload_payload"].assert_not_called()
+        self.assertFalse(pixer_upload.SHOWN_PATH.exists())
+
+    def test_a_successful_upload_is_kept_as_the_shown_image(self):
+        self.battery(80)
+        self.assertEqual(pixer_upload.main([str(self.image), "--min-battery", "20"]), 0)
+        self.assertEqual(read_png(pixer_upload.SHOWN_PATH.read_bytes()), (4, 2, bytes(8)))
 
     def test_battery_at_the_threshold_uploads(self):
         self.battery(20)
