@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # 3.9 is the oldest Python the README promises; 3.13 is what the Raspberry Pi runs.
+    # The official images still carry 3.9, which the hosted Ubuntu runners no longer offer.
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.13"]
+    runs-on: ubuntu-latest
+    container: python:${{ matrix.python }}-slim
+    steps:
+      - uses: actions/checkout@v5
+      - run: apt-get update -q && apt-get install -yq --no-install-recommends ffmpeg  # for the encoder test
+      - run: python -m unittest discover -s tests
+      - run: sh -n misc/pixer-deploy.sh  # the Pi runs it from cron; at least make sure it parses

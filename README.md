@@ -411,6 +411,16 @@ The tests pin the encoder against values taken from the decompiled app —
 grayscale weights, dither output, nibble packing order (including the portrait
 rotation), and the header format.
 
+GitHub Actions runs them on every pull request and every push to `main`, on
+Python 3.9 and 3.13, with ffmpeg installed so the encoder test runs too; they
+can also be started by hand from the Actions tab. The Raspberry Pi deploys
+itself: every 10 minutes cron runs `misc/pixer-deploy.sh`, which checks
+whether `main` has a new commit on which both test jobs passed, fast-forwards
+the checkout to that commit and runs the tests again. If they fail there, it
+goes back to the previous commit; if the photo page's code changed, it
+restarts `pixer_web.py`. It logs to `~/pixer-deploy.log`, and nothing on
+GitHub needs to reach the home network.
+
 ## Recovering a stuck frame
 
 - Short press — power on / wake
