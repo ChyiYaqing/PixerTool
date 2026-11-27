@@ -2,7 +2,8 @@
 """Put new Gmail and GitHub notifications on the frame, in place of the next rotation card.
 
   poll DIR    fetch unread mail and notifications; if any are new, render DIR/pending.png
-  take DIR    print the pending card's path and mark it shown, or exit 1 when there is none
+  take DIR        copy the pending card and print the copy's path, or exit 1 when there is none
+  done DIR CARD   after CARD was uploaded: if it is such a copy, its items leave the pending list
 
 Mail is read with IMAP and never marked read. Each new message is summarised in one Chinese
 line by Ollama on the LAN. A message that mentions codes, passwords or money shows only its
@@ -21,12 +22,14 @@ import html
 import imaplib
 import json
 import re
+import shutil
 import socket
 import ssl
 import sys
 import time
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 
 from daily_english import CHROME, render
@@ -42,6 +45,7 @@ MAX_SUMMARY = 40
 GITHUB_PAGE = 50
 SHOWN = 5
 KEEP_SEEN = 1000
+COPY = re.compile(r"shown-[0-9a-f]{12}\.png")  # the names take gives its copies
 SENSITIVE = re.compile(
     r"验证码|校验码|动态码|动态密码|密码|口令|银行|账单|余额|转账|付款|支付|卡号|账号|账户|"
     r"(?:verification|security|login|sign-in|confirmation|access) code|one[- ]time|\bOTP\b|\b2FA\b|\bPIN\b|"
@@ -181,8 +185,12 @@ def ago(when: str, now: dt.datetime) -> str:
     return f"{minutes // 60} 小时前" if minutes < 24 * 60 else f"{minutes // (24 * 60)} 天前"
 
 
+def newest_first(items: list[dict]) -> list[dict]:
+    return sorted(items, key=lambda i: i["when"], reverse=True)
+
+
 def card_page(items: list[dict], now: dt.datetime, model: str) -> str:
-    newest = sorted(items, key=lambda i: i["when"], reverse=True)
+    newest = newest_first(items)
     rows = "".join(
         f'<li><div class="who"><span class="src">{html.escape(i["source"])}</span>{html.escape(i["who"])}'
         f'<span class="ago">{ago(i["when"], now)}</span></div>'
@@ -268,7 +276,7 @@ def poll(directory: Path, config: Path, ollama: str, model: str, chrome: str) ->
     # The state first, then the card drawn from it, then "drawn": a power cut at any point leaves
     # drawn false, so take shows nothing stale and the next poll draws the card again.
     if pending != old:
-        state = {"seen": (seen + [i["key"] for i in new])[-KEEP_SEEN:], "pending": pending, "drawn": False}
+        state = {**state, "seen": (seen + [i["key"] for i in new])[-KEEP_SEEN:], "pending": pending, "drawn": False}
         write_json(state_file, state)
     if not pending:
         card.unlink(missing_ok=True)
@@ -283,20 +291,45 @@ def poll(directory: Path, config: Path, ollama: str, model: str, chrome: str) ->
 
 
 def take(directory: Path) -> Path | None:
-    """The card, once, when it shows everything pending; else None."""
+    """A copy of the card when it shows everything pending, else None. Its items stay pending
+    until done() hears that the upload worked, so a failed upload is tried again next time."""
     card, state = directory / "pending.png", read_state(directory)
     if not (state["pending"] and state.get("drawn") and card.is_file()):
         return None
-    shown = directory / "shown.png"
-    card.replace(shown)
-    write_json(directory / "state.json", {**state, "pending": []})
-    return shown
+    # A copy of its own for each take: an earlier upload may still be waiting for the frame.
+    name = f"shown-{uuid.uuid4().hex[:12]}.png"
+    shutil.copyfile(card, directory / ".shown.new")  # one fixed name: under the lock, the next take overwrites it
+    (directory / ".shown.new").replace(directory / name)
+    kept = dict(list(state.get("taken", {}).items())[-2:])  # older ones failed long ago
+    for stale in directory.glob("shown-*.png"):  # also copies a crash left unrecorded
+        if COPY.fullmatch(stale.name) and stale.is_file() and stale.name not in kept and stale.name != name:
+            stale.unlink()
+    kept[name] = [i["key"] for i in newest_first(state["pending"])[:SHOWN]]  # the rest wait for the next card
+    write_json(directory / "state.json", {**state, "taken": kept})
+    return directory / name
+
+
+def done(directory: Path, uploaded: Path) -> None:
+    """The upload of uploaded worked: if it was a taken card, what it showed leaves the pending list."""
+    state = read_state(directory)
+    taken = dict(state.get("taken", {}))
+    if uploaded.resolve().parent != directory.resolve() or uploaded.name not in taken:
+        return  # the usual rotation card
+    shown = set(taken.pop(uploaded.name))
+    uploaded.unlink(missing_ok=True)
+    pending = [i for i in state["pending"] if i["key"] not in shown]
+    if not pending:
+        (directory / "pending.png").unlink(missing_ok=True)
+    # Items that came after the take are still on pending.png beside the shown ones: draw it again.
+    drawn = state.get("drawn") and pending == state["pending"]
+    write_json(directory / "state.json", {**state, "pending": pending, "taken": taken, "drawn": drawn})
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["poll", "take"])
+    parser.add_argument("command", choices=["poll", "take", "done"])
     parser.add_argument("directory", type=Path)
+    parser.add_argument("card", type=Path, nargs="?", help="done: the card that was uploaded")
     parser.add_argument("--config", type=Path, default=CONFIG,
                         help=f"folder with 'gmail' (address and app password) and 'github-token' (default: {CONFIG})")
     parser.add_argument("--ollama", default=OLLAMA, help=f"Ollama server (default: {OLLAMA})")
@@ -306,14 +339,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if (args.command == "done") != (args.card is not None):
+        parser.error("CARD goes with done, and only with done")
     args.directory.mkdir(parents=True, exist_ok=True)
     args.directory.chmod(0o700)  # senders and summaries: yours alone
     with open(args.directory / ".lock", "w") as lock:
         try:
-            # poll and take never interleave. A poll can take minutes (mail, Ollama, Chromium):
+            # The commands never interleave. A poll can take minutes (mail, Ollama, Chromium):
             # take does not wait, so the rotation shows its usual card, and a second poll skips its turn.
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # done waits: the card is already on the frame.
+            fcntl.flock(lock, fcntl.LOCK_EX | (0 if args.command == "done" else fcntl.LOCK_NB))
         except BlockingIOError:
             if args.command == "poll":
                 print("the last poll is still running", file=sys.stderr)
@@ -324,6 +361,9 @@ def main(argv: list[str] | None = None) -> int:
                 if card is None:
                     return 1  # quietly: cron then shows the usual rotation card
                 print(card)
+                return 0
+            if args.command == "done":
+                done(args.directory, args.card)
                 return 0
             new = poll(args.directory, args.config, args.ollama, args.model, args.chrome)
             if new:
