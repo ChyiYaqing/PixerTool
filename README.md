@@ -207,8 +207,15 @@ overlap when the same user runs them with the same `--host` and `--port`: they
 share a lock file in `/tmp`. While one holds the frame, the page asks the phone
 to try again, and `pixer_upload.py` waits up to five minutes before giving up.
 
+The page also links to `/shown.png`: the last picture the frame acknowledged,
+as the frame shows it once redrawn (16 grays, after dithering). Every upload that works, from the page or from
+`pixer_upload.py`, keeps that picture in `~/.cache/pixer/shown.png`, so it
+covers cron cards too when the same user runs them. Uploads from other
+programs or other users do not update it, and it assumes one frame per user.
+
 Anyone who can open the page can change the picture, the same as anyone who
-can reach the frame's port 6000. Run it only on a network you trust. macOS may
+can reach the frame's port 6000, and can see the picture now on the frame,
+notification cards included. Run it only on a network you trust. macOS may
 ask whether Python can accept incoming connections; allow it, or phones cannot
 reach the page.
 

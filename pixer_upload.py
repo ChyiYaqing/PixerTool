@@ -11,10 +11,12 @@ import os
 import secrets
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import time
 import warnings
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
@@ -55,6 +57,8 @@ LOCK_DIR = Path("/tmp")
 # Long enough for another upload to finish: a few seconds of sending, then the redraw.
 LOCK_WAIT = 300.0
 LOCK_POLL = 0.5
+# A picture of what the frame shows since the last upload that worked; pixer_web.py serves it.
+SHOWN_PATH = Path.home() / ".cache" / "pixer" / "shown.png"
 
 
 class PixerError(RuntimeError):
@@ -302,6 +306,51 @@ def pack_4bit(levels: bytes, width: int, height: int) -> bytes:
                     levels[low_index] | (levels[high_index] << 4)
                 )
     return bytes(packed)
+
+
+def unpack_4bit(packed: bytes, width: int, height: int) -> bytes:
+    """The levels pack_4bit packed, in the image's own orientation."""
+    if len(packed) * 2 != width * height:
+        raise ValueError("packed buffer does not match dimensions")
+    low, high = bytes(b & 15 for b in range(256)), bytes(b >> 4 for b in range(256))
+    levels = bytearray(width * height)
+    if width > height:
+        levels[0::2], levels[1::2] = packed.translate(low), packed.translate(high)
+    else:  # each run of height // 2 bytes is one column, from the right, two rows to a byte
+        half = height // 2
+        for run in range(width):
+            column, pairs = width - 1 - run, packed[run * half:(run + 1) * half]
+            levels[column::2 * width] = pairs.translate(low)
+            levels[column + width::2 * width] = pairs.translate(high)
+    return bytes(levels)
+
+
+def gray_png(levels: bytes, width: int, height: int) -> bytes:
+    """An 8-bit grayscale PNG of 16-level pixels (0 is black)."""
+    gray = levels.translate(bytes(min(v, 15) * 17 for v in range(256)))
+    rows = b"".join(b"\0" + gray[y * width:(y + 1) * width] for y in range(height))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+
+
+def remember_shown(payload: bytes, width: int, height: int) -> None:
+    """Keep a picture of what was just uploaded, as the frame shows it. Never fails the upload."""
+    fresh = SHOWN_PATH.with_name(f"{SHOWN_PATH.name}.{os.getpid()}.new")  # its own, even beside another upload
+    try:
+        SHOWN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        fresh.write_bytes(gray_png(unpack_4bit(payload, width, height), width, height))
+        fresh.replace(SHOWN_PATH)
+    except (OSError, ValueError) as exc:
+        for stale in (fresh, SHOWN_PATH):  # no picture is better than the one before this upload
+            try:
+                stale.unlink(missing_ok=True)
+            except OSError:
+                pass
+        print(f"warning: could not keep a copy of the shown image: {exc}", file=sys.stderr)
 
 
 def build_payload(
@@ -834,6 +883,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
 
             acknowledgement = upload_payload(payload, args.host, args.port)
+            remember_shown(payload, width, height)
         print(
             "Pixer acknowledged the upload: "
             + acknowledgement.decode("ascii", errors="backslashreplace")

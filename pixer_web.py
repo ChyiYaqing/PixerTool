@@ -57,6 +57,7 @@ PAGE = """<!doctype html>
 </fieldset>
 <button id="send" disabled>Send</button>
 <p id="status"></p>
+<p><a href="/shown.png">See the last picture sent to the frame</a></p>
 <script>
 const photo = document.getElementById("photo");
 const preview = document.getElementById("preview");
@@ -122,12 +123,21 @@ class UploadHandler(BaseHTTPRequestHandler):
     timeout = READ_TIMEOUT
 
     def do_GET(self) -> None:
-        if urlsplit(self.path).path != "/":
+        path = urlsplit(self.path).path
+        if path == "/shown.png":
+            try:
+                body, kind = pixer.SHOWN_PATH.read_bytes(), "image/png"
+            except OSError:  # none yet, or the cache folder is unusable
+                self.send_error(HTTPStatus.NOT_FOUND, "No picture to show yet")
+                return
+        elif path == "/":
+            body, kind = PAGE.encode("utf-8"), "text/html; charset=utf-8"
+        else:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
-        body = PAGE.encode("utf-8")
         self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Type", kind)
+        self.send_header("Cache-Control", "no-store")  # the frame changes every few minutes
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -214,7 +224,7 @@ class UploadHandler(BaseHTTPRequestHandler):
             path = Path(folder) / "upload"
             path.write_bytes(image)
             try:
-                payload, _, _ = pixer.build_payload(path, "auto", fit)
+                payload, width, height = pixer.build_payload(path, "auto", fit)
             except (pixer.PixerError, ValueError, OSError) as exc:
                 detail = str(exc).replace(str(path), "the photo")
                 return HTTPStatus.BAD_REQUEST, f"This photo could not be converted: {detail}"
@@ -229,6 +239,7 @@ class UploadHandler(BaseHTTPRequestHandler):
                         "Charge the frame, then send the photo again.",
                     )
             pixer.upload_payload(payload, host, port, progress_stream=io.StringIO())
+            pixer.remember_shown(payload, width, height)
         except (pixer.PixerError, OSError) as exc:
             return HTTPStatus.BAD_GATEWAY, f"The frame did not take the photo: {exc}"
         return HTTPStatus.OK, "The frame received the photo and is redrawing."

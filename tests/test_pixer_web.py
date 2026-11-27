@@ -23,12 +23,15 @@ def setUpModule():
     unittest.addModuleCleanup(folder.cleanup)
     unittest.addModuleCleanup(setattr, pixer, "LOCK_DIR", pixer.LOCK_DIR)
     pixer.LOCK_DIR = Path(folder.name)
+    unittest.addModuleCleanup(setattr, pixer, "SHOWN_PATH", pixer.SHOWN_PATH)
+    pixer.SHOWN_PATH = Path(folder.name) / "shown.png"
 
 
 class WebUploadTests(unittest.TestCase):
     def setUp(self):
         patcher = unittest.mock.patch.multiple(
-            pixer, build_payload=unittest.mock.DEFAULT, upload_payload=unittest.mock.DEFAULT
+            pixer, build_payload=unittest.mock.DEFAULT, upload_payload=unittest.mock.DEFAULT,
+            remember_shown=unittest.mock.DEFAULT,
         )
         self.mocks = patcher.start()
         self.addCleanup(patcher.stop)
@@ -79,6 +82,20 @@ class WebUploadTests(unittest.TestCase):
         self.assertFalse(path.exists())
         upload = self.mocks["upload_payload"]
         self.assertEqual(upload.call_args.args, (b"payload", "10.0.0.5", 6000))
+        self.mocks["remember_shown"].assert_called_once_with(b"payload", 1872, 1404)
+
+    def test_the_shown_image_is_served_fresh(self):
+        pixer.SHOWN_PATH.unlink(missing_ok=True)
+        self.assertEqual(self.request("GET", "/shown.png")[0], 404)
+        pixer.SHOWN_PATH.write_bytes(b"\x89PNG fake")
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=5)
+        self.addCleanup(connection.close)
+        connection.request("GET", "/shown.png")
+        response = connection.getresponse()
+        self.assertEqual((response.status, response.read()), (200, b"\x89PNG fake"))
+        self.assertEqual(response.getheader("Content-Type"), "image/png")
+        self.assertEqual(response.getheader("Cache-Control"), "no-store")
+        self.assertIn(b'href="/shown.png"', self.request("GET", "/")[1])
 
     def test_fit_defaults_to_cover(self):
         self.post()
@@ -121,6 +138,7 @@ class WebUploadTests(unittest.TestCase):
         status, result = self.post()
         self.assertEqual((status, result["ok"]), (502, False))
         self.assertIn("cannot reach Pixer", result["message"])
+        self.mocks["remember_shown"].assert_not_called()
 
     def raw_connection(self):
         connection = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=5)
