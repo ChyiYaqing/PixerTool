@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Put new Gmail and GitHub notifications on the frame, in place of the next rotation card.
+"""Put new Gmail, GitHub and Mattermost notifications on the frame, in place of the next rotation card.
 
   poll DIR    fetch unread mail and notifications; if any are new, render DIR/pending.png
   take DIR        copy the pending card and print the copy's path, or exit 1 when there is none
@@ -7,7 +7,8 @@
 
 Mail is read with IMAP and never marked read. Each new message is summarised in one Chinese
 line by Ollama on the LAN. A message that mentions codes, passwords or money shows only its
-sender, by rule and not by the model's judgement. Logs carry counts, never content.
+sender, by rule and not by the model's judgement. A Mattermost message shows its own first words,
+hidden by the same rule. Logs carry counts, never content.
 """
 
 from __future__ import annotations
@@ -43,6 +44,8 @@ MAX_MAILS = 20
 MAX_MAIL_BYTES = 1_000_000
 MAX_SUMMARY = 40
 GITHUB_PAGE = 50
+MATTERMOST_DAYS = 2
+MATTERMOST_PAGE = 1000  # the most posts one "since" request returns
 SHOWN = 5
 KEEP_SEEN = 1000
 COPY = re.compile(r"shown-[0-9a-f]{12}\.png")  # the names take gives its copies
@@ -161,6 +164,56 @@ def github_notifications(token: str) -> tuple[list[dict], set[str] | None]:
     return items, ({i["key"] for i in items} if len(notes) < GITHUB_PAGE else None)
 
 
+def mattermost_posts(server: str, token: str) -> tuple[list[dict], set[str] | None]:
+    """Unread direct and group messages, and unread channel posts that mention me, from the last two days;
+    with their keys, or None when a channel had more than one reply holds."""
+    def api(path: str, data: bytes | None = None):
+        headers = {"Authorization": f"Bearer {token}", **({"Content-Type": "application/json"} if data else {})}
+        return json.loads(get(f"{server.rstrip('/')}/api/v4{path}", headers, data))
+
+    me = api("/users/me")
+    # Usernames are ASCII: Chinese may follow straight on, a full stop may end the sentence, and an
+    # address like root@all is no mention. @here is left out: the server does not count it for those offline.
+    mention = re.compile(rf"(?<![a-z0-9._-])@(?:{re.escape(me['username'])}|channel|all)(?![a-z0-9_-])(?!\.[a-z0-9_-])",
+                         re.IGNORECASE | re.ASCII)
+    floor = int(time.time() * 1000) - MATTERMOST_DAYS * 86_400_000
+    channels, members = {}, {}
+    for team in api("/users/me/teams"):  # direct and group channels come with every team
+        channels.update({c["id"]: c for c in api(f"/users/me/teams/{team['id']}/channels")})
+        members.update({m["channel_id"]: m for m in api(f"/users/me/teams/{team['id']}/channels/members")})
+    posts, complete = [], True
+    for cid, member in members.items():
+        channel = channels.get(cid)
+        since = max(member["last_viewed_at"], floor) if channel else 0
+        if not channel or channel["last_post_at"] <= since:
+            continue  # read, or nothing from the last two days
+        direct = channel["type"] in ("D", "G")
+        if not (direct or member["mention_count"]):
+            continue
+        reply = api(f"/channels/{cid}/posts?since={since}")["posts"]
+        complete = complete and len(reply) < MATTERMOST_PAGE
+        for post in reply.values():
+            # "since" also returns older posts edited since. Plugins' posts have a type of their own.
+            if post["create_at"] > since and post["user_id"] != me["id"] and not post["delete_at"] \
+                    and not post["type"].startswith("system_") and (direct or mention.search(post["message"])):
+                posts.append((post, channel))
+    names = {}
+    if posts:
+        for user in api("/users/ids", json.dumps(sorted({p["user_id"] for p, _ in posts})).encode()):
+            full = " ".join(filter(None, (user.get("first_name"), user.get("last_name"))))
+            names[user["id"]] = user.get("nickname") or full or user["username"]
+    items = []
+    for post, channel in posts:
+        who = names.get(post["user_id"], "?")
+        if channel["type"] != "D":
+            who += " · " + ("群聊" if channel["type"] == "G" else channel["display_name"])
+        line = hide(" ".join(post["message"].split()))  # judged whole, before the cut
+        when = dt.datetime.fromtimestamp(post["create_at"] / 1000, dt.timezone.utc)
+        items.append({"key": f"mattermost:{post['id']}", "source": "Mattermost", "who": who,
+                      "summary": line[:MAX_SUMMARY] or "（附件）", "when": when.isoformat()})
+    return items, ({i["key"] for i in items} if complete else None)
+
+
 def summarise(mail: dict, ollama: str | None, model: str) -> str:
     """One Chinese line for a mail; the subject without Ollama or if it fails; a notice if it is sensitive."""
     if mail["sensitive"]:
@@ -241,13 +294,14 @@ def read_state(directory: Path) -> dict:
 def poll(directory: Path, config: Path, ollama: str, model: str, chrome: str) -> list[dict]:
     """Fetch every source; add what is new to the pending card and drop what is no longer unread."""
     items, unread, failures = [], {}, 0
-    gmail, token = secret(config / "gmail"), secret(config / "github-token")
+    gmail, token, mm = secret(config / "gmail"), secret(config / "github-token"), secret(config / "mattermost")
     state = read_state(directory)
     seen, old = state["seen"], state["pending"]
     known = set(seen) | {i["key"] for i in old}
     # Google shows an app password in groups of four letters; the spaces are not part of it.
     for name, fetch in (("Gmail", gmail and (lambda: gmail_messages(gmail[0], gmail[1].replace(" ", ""), known))),
-                        ("GitHub", token and (lambda: github_notifications(token[0])))):
+                        ("GitHub", token and (lambda: github_notifications(token[0]))),
+                        ("Mattermost", mm and (lambda: mattermost_posts(mm[0], mm[1])))):
         if not fetch:
             continue
         try:
@@ -331,7 +385,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("directory", type=Path)
     parser.add_argument("card", type=Path, nargs="?", help="done: the card that was uploaded")
     parser.add_argument("--config", type=Path, default=CONFIG,
-                        help=f"folder with 'gmail' (address and app password) and 'github-token' (default: {CONFIG})")
+                        help=f"folder with 'gmail' (address and app password), 'github-token' and 'mattermost' "
+                             f"(server URL and personal access token) (default: {CONFIG})")
     parser.add_argument("--ollama", default=OLLAMA, help=f"Ollama server (default: {OLLAMA})")
     parser.add_argument("--model", default=MODEL, help=f"Ollama model (default: {MODEL})")
     parser.add_argument("--chrome", default=CHROME, help="Chrome or Chromium binary")
@@ -367,7 +422,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             new = poll(args.directory, args.config, args.ollama, args.model, args.chrome)
             if new:
-                counts = {s: sum(i["source"] == s for i in new) for s in ("Gmail", "GitHub")}
+                counts = {s: sum(i["source"] == s for i in new) for s in ("Gmail", "GitHub", "Mattermost")}
                 print(" ".join(f"{s} {n}" for s, n in counts.items() if n), "new")  # counts only, no content
             return 0
         except (OSError, ValueError, RuntimeError, imaplib.IMAP4.error) as exc:

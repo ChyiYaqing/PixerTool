@@ -78,6 +78,42 @@ def notification(number, reason="review_requested", title="Add a board", updated
             "subject": {"title": title, "type": "PullRequest"}, "repository": {"full_name": "me/tool"}}
 
 
+MS = 1_795_000_000_000  # a recent time in Mattermost's milliseconds
+
+
+def mm_post(pid, channel, message, user="u2", created=MS, **extra):
+    return {"id": pid, "channel_id": channel, "user_id": user, "message": message, "create_at": created,
+            "delete_at": 0, "type": "", **extra}
+
+
+def mattermost(posts, viewed=MS - 1, mentions=1):
+    """A fake server: a direct channel, a group, a channel that mentions me, a quiet channel, and a read one."""
+    channels = [{"id": "dm", "type": "D", "display_name": "", "last_post_at": MS},
+                {"id": "gm", "type": "G", "display_name": "x, y", "last_post_at": MS},
+                {"id": "town", "type": "O", "display_name": "Town Square", "last_post_at": MS},
+                {"id": "quiet", "type": "O", "display_name": "Quiet", "last_post_at": MS},
+                {"id": "seen", "type": "D", "display_name": "", "last_post_at": MS - 5}]
+    members = [{"channel_id": c["id"], "last_viewed_at": viewed, "mention_count": mentions if c["id"] == "town" else 0}
+               for c in channels] + [{"channel_id": "seen", "last_viewed_at": MS, "mention_count": 0}]
+    routes = {"/users/me": {"id": "me", "username": "chyi"}, "/users/me/teams": [{"id": "t1"}, {"id": "t2"}],
+              "/users/me/teams/t1/channels": channels, "/users/me/teams/t2/channels": channels[:1],
+              "/users/me/teams/t1/channels/members": members, "/users/me/teams/t2/channels/members": members[:1]}
+    calls = []
+
+    def get(url, headers=None, data=None, timeout=30):
+        path = url.split("/api/v4", 1)[1]
+        calls.append((path, headers, data))
+        if path == "/users/ids":
+            return json.dumps([{"id": "u2", "username": "bob", "first_name": "Bob", "last_name": "Li"},
+                               {"id": "u3", "username": "carol", "nickname": "C"},
+                               {"id": "u4", "username": "dave"}]).encode()
+        if path.startswith("/channels/"):
+            channel = path.split("/")[2]
+            return json.dumps({"order": [], "posts": {p["id"]: p for p in posts if p["channel_id"] == channel}}).encode()
+        return json.dumps(routes[path]).encode()
+    return get, calls
+
+
 class GmailTests(unittest.TestCase):
     def test_reads_primary_unread_without_marking_it_read(self):
         fake = FakeIMAP({111: mail(date="Mon, 1 Jan 2001 00:00:00 -0000"),
@@ -268,6 +304,68 @@ class GitHubTests(unittest.TestCase):
             self.assertIsNone(ib.github_notifications("tok")[1])
 
 
+class MattermostTests(unittest.TestCase):
+    def fetch(self, posts, **server):
+        get, calls = mattermost(posts, **server)
+        with mock.patch.object(ib, "get", get), mock.patch.object(ib.time, "time", return_value=MS / 1000):
+            items, keys = ib.mattermost_posts("https://mm.example.com/", "tok")
+        return items, keys, calls
+
+    def test_direct_messages_and_mentions_become_items(self):
+        items, keys, calls = self.fetch([
+            mm_post("p1", "dm", "Are you free\nat three?"),
+            mm_post("p2", "gm", "lunch", user="u3"),
+            mm_post("p3", "town", "@chyi please look", user="u4"),
+            mm_post("p4", "town", "@chyiyaqing is someone else"),
+            mm_post("p5", "town", "no mention here"),
+            mm_post("p6", "town", "heads up @all"),
+            mm_post("p11", "town", "anyone @here?"),
+            mm_post("p7", "town", "@chyi看一下"),
+            mm_post("p8", "town", "please check, @chyi."),
+            mm_post("p9", "town", "ssh root@all or mail chyi@all.com, or @chyi.li, @chyiK"),
+            mm_post("p10", "dm", "build passed", type="custom_ci"),
+        ])
+        self.assertEqual(sorted(i["key"].split(":")[1] for i in items), ["p1", "p10", "p2", "p3", "p6", "p7", "p8"])
+        self.assertEqual(keys, {i["key"] for i in items})
+        self.assertEqual(items[0], {"key": "mattermost:p1", "source": "Mattermost", "who": "Bob Li",
+                                    "summary": "Are you free at three?",
+                                    "when": dt.datetime.fromtimestamp(MS / 1000, dt.timezone.utc).isoformat()})
+        who = {i["key"]: i["who"] for i in items}
+        self.assertEqual([who[f"mattermost:{p}"] for p in ("p2", "p3", "p6")], ["C · 群聊", "dave · Town Square", "Bob Li · Town Square"])
+        self.assertEqual(calls[0][1]["Authorization"], "Bearer tok")
+        fetched = [c[0] for c in calls if c[0].startswith("/channels/")]
+        self.assertEqual(fetched, [f"/channels/{c}/posts?since={MS - 1}" for c in ("dm", "gm", "town")])  # not quiet, not seen
+        self.assertEqual(json.loads(calls[-1][2]), ["u2", "u3", "u4"])
+
+    def test_own_system_deleted_and_older_posts_are_skipped(self):
+        items, _, _ = self.fetch([
+            mm_post("mine", "dm", "hi", user="me"),
+            mm_post("sys", "dm", "joined", type="system_join_channel"),
+            mm_post("gone", "dm", "oops", delete_at=MS),
+            mm_post("old", "dm", "edited since", created=MS - 1),
+        ])
+        self.assertEqual(items, [])
+
+    def test_only_the_last_two_days_are_fetched(self):
+        _, _, calls = self.fetch([], viewed=0)
+        floor = MS - 2 * 86_400_000
+        self.assertIn(f"/channels/dm/posts?since={floor}", [c[0] for c in calls])
+        self.assertNotIn("/users/ids", [c[0] for c in calls])  # nobody to name
+        with mock.patch.object(ib, "MATTERMOST_DAYS", 0):  # the floor passes every last post: nothing to fetch
+            _, _, calls = self.fetch([], viewed=0)
+        self.assertFalse([c for c in calls if c[0].startswith("/channels/")])
+
+    def test_a_full_reply_may_be_incomplete(self):
+        with mock.patch.object(ib, "MATTERMOST_PAGE", 2):
+            items, keys, _ = self.fetch([mm_post("a", "dm", "1"), mm_post("b", "dm", "2")])
+        self.assertEqual((len(items), keys), (2, None))
+
+    def test_codes_are_hidden_and_long_lines_cut(self):
+        items, _, _ = self.fetch([mm_post("a", "dm", "x" * 60 + " 验证码 123456"), mm_post("b", "dm", "y" * 60),
+                                  mm_post("c", "dm", "")])
+        self.assertEqual([i["summary"] for i in items], [ib.HIDDEN, "y" * ib.MAX_SUMMARY, "（附件）"])
+
+
 class CardPageTests(unittest.TestCase):
     def test_newest_first_escaped_and_capped(self):
         items = [{"source": "Gmail", "who": f"<p{n}>", "summary": f"s{n}&",
@@ -303,6 +401,8 @@ class PollTests(unittest.TestCase):
         def get(url, headers=None, data=None, timeout=30):
             if "/notifications" in url:
                 return json.dumps(notes).encode()
+            if "/api/v4" in url:
+                return self.mattermost(url, headers, data, timeout)
             return ollama_reply("摘要")
 
         def connect(host, ssl_context=None, timeout=None):
@@ -478,6 +578,16 @@ class PollTests(unittest.TestCase):
         (self.config / "github-token").unlink()
         with self.assertRaisesRegex(RuntimeError, "every source failed"):
             self.run_poll({}, [], mail_error=OSError("imap down"))
+
+    def test_mattermost_joins_the_card_and_leaves_when_read(self):
+        (self.config / "mattermost").write_text("https://mm.example.com\nmmtok\n")
+        self.mattermost, _ = mattermost([mm_post("p1", "dm", "hello")])
+        with mock.patch.object(ib.time, "time", return_value=MS / 1000):
+            new, _ = self.run_poll({}, [])
+            self.assertEqual([(i["key"], i["summary"]) for i in new], [("mattermost:p1", "hello")])
+            self.mattermost, _ = mattermost([mm_post("p1", "dm", "hello")], viewed=MS)  # read on the phone
+            self.run_poll({}, [])
+        self.assertEqual(self.pending(), [])
 
     def test_missing_config_skips_that_source(self):
         (self.config / "gmail").unlink()

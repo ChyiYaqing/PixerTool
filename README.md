@@ -318,8 +318,8 @@ can mislead the sentence too.
 
 ### Show new mail and GitHub notifications
 
-`misc/inbox_board.py` turns unread Gmail and GitHub notifications into a card
-that takes the place of the next rotation card. `poll` checks both and renders
+`misc/inbox_board.py` turns unread Gmail, GitHub and Mattermost notifications
+into a card that takes the place of the next rotation card. `poll` checks them and renders
 a card when something is new. `take` prints that card's path, or exits with
 status 1 when there is nothing new, so the rotation shows its usual card.
 `done` takes the card off once the upload has worked; until then, every
@@ -348,6 +348,15 @@ Put the credentials in `~/.config/pixer`, readable only by you
   through it like the GitHub requests.
 - `github-token`: a classic personal access token with only the
   `notifications` scope. Fine-grained tokens cannot read notifications.
+- `mattermost`: the server URL on the first line and a
+  [personal access token](https://docs.mattermost.com/developer/personal-access-tokens.html)
+  on the second. The card shows unread direct and group messages, and unread
+  channel posts that mention you by username, `@channel` or `@all`,
+  from the last two days. Each shows its own first words, not a summary, so
+  messages never go to the model. Requests go through `HTTPS_PROXY` when it is set.
+  Unread is judged per channel: a thread reply read only in the Threads view
+  stays until you open its channel, and a mention in a thread is missed once
+  you have opened its channel.
 
 The card shows each sender with one Chinese line from Ollama. When the subject
 or body mentions a code, a password, a bank or an amount of money, the card
