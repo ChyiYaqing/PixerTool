@@ -72,16 +72,25 @@ esac
   fi
   # The photo page runs all the time, so it only picks up new code when restarted.
   if ! git diff --quiet "$prev" "$sha" -- pixer_web.py pixer_upload.py; then
-    pkill -f "python3 pixer_web.py"
-    sleep 2
-    # Same command as the @reboot line in crontab.
-    nohup python3 pixer_web.py --host 10.1.7.102 --min-battery 20 >> "$HOME/pixer-web.log" 2>&1 &
-    web=$!
-    sleep 5
-    if kill -0 "$web" 2> /dev/null; then  # the new process, not an old one that lingered
-      echo "restarted pixer_web.py"
+    # Anchored, so it matches the server itself and not a shell whose command line mentions it.
+    web_re='^python3 pixer_web\.py( |$)'
+    pkill -f "$web_re"
+    for _ in 1 2 3 4 5 6 7 8 9 10; do  # wait for the old one to free the port
+      pgrep -f "$web_re" > /dev/null || break
+      sleep 1
+    done
+    if pgrep -f "$web_re" > /dev/null; then
+      echo "the old pixer_web.py did not stop; it keeps serving the previous code"
     else
-      echo "pixer_web.py DID NOT restart; see ~/pixer-web.log"
+      # Same command as the @reboot line in crontab.
+      nohup python3 pixer_web.py --host 10.1.7.102 --min-battery 20 >> "$HOME/pixer-web.log" 2>&1 &
+      web=$!
+      sleep 5
+      if kill -0 "$web" 2> /dev/null; then  # the new process, not an old one that lingered
+        echo "restarted pixer_web.py"
+      else
+        echo "pixer_web.py DID NOT restart; see ~/pixer-web.log"
+      fi
     fi
   fi
 } >> "$LOG" 2>&1
