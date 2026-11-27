@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import datetime as dt
 import http.client
 import importlib.util
